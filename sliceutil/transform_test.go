@@ -1,17 +1,18 @@
-package silces_test
+package sliceutil_test
 
 import (
 	"errors"
 	"fmt"
 	"reflect"
-	slices "silo/silces"
 	"testing"
+
+	"silo/sliceutil"
 )
 
 func TestFilter(t *testing.T) {
 	input := []int{1, 2, 3, 4, 5, 6}
 	want := []int{2, 4, 6}
-	got := slices.Filter(input, func(x int) bool {
+	got := sliceutil.Filter(input, func(x int) bool {
 		return x%2 == 0
 	})
 	if !reflect.DeepEqual(got, want) {
@@ -23,7 +24,7 @@ func TestFilterInPlace(t *testing.T) {
 	input := []int{1, 2, 3, 4, 5, 6}
 	want := []int{2, 4, 6}
 
-	got := slices.FilterInPlace(input, func(x int) bool {
+	got := sliceutil.FilterInPlace(input, func(x int) bool {
 		return x%2 == 0
 	})
 
@@ -40,7 +41,7 @@ func TestFilterInPlace(t *testing.T) {
 func TestMap(t *testing.T) {
 	input := []int{1, 2, 3}
 	want := []string{"1", "2", "3"}
-	got := slices.Map(input, func(x int) string {
+	got := sliceutil.Map(input, func(x int) string {
 		return fmt.Sprintf("%d", x)
 	})
 	if !reflect.DeepEqual(got, want) {
@@ -51,7 +52,7 @@ func TestMap(t *testing.T) {
 func TestReduce(t *testing.T) {
 	input := []int{1, 2, 3, 4}
 	want := 10
-	got := slices.Reduce(input, func(acc, item int) int {
+	got := sliceutil.Reduce(input, func(acc, item int) int {
 		return acc + item
 	}, 0)
 	if got != want {
@@ -62,7 +63,7 @@ func TestReduce(t *testing.T) {
 func TestTryFilter(t *testing.T) {
 	t.Run("Success", func(t *testing.T) {
 		input := []int{1, 2, 3}
-		got, err := slices.TryFilter(input, func(x int) (bool, error) {
+		got, err := sliceutil.TryFilter(input, func(x int) (bool, error) {
 			return x > 1, nil
 		})
 		if err != nil {
@@ -76,7 +77,7 @@ func TestTryFilter(t *testing.T) {
 	t.Run("Error", func(t *testing.T) {
 		input := []int{1, 2, 3}
 		expectedErr := errors.New("fail")
-		_, err := slices.TryFilter(input, func(x int) (bool, error) {
+		_, err := sliceutil.TryFilter(input, func(x int) (bool, error) {
 			if x == 2 {
 				return false, expectedErr
 			}
@@ -91,7 +92,7 @@ func TestTryFilter(t *testing.T) {
 func TestTryMap(t *testing.T) {
 	t.Run("Success", func(t *testing.T) {
 		input := []int{1, 2}
-		got, err := slices.TryMap(input, func(x int) (int, error) {
+		got, err := sliceutil.TryMap(input, func(x int) (int, error) {
 			return x * 2, nil
 		})
 		if err != nil {
@@ -105,7 +106,7 @@ func TestTryMap(t *testing.T) {
 	t.Run("Error", func(t *testing.T) {
 		input := []int{1, 2}
 		expectedErr := errors.New("fail")
-		_, err := slices.TryMap(input, func(x int) (int, error) {
+		_, err := sliceutil.TryMap(input, func(x int) (int, error) {
 			return 0, expectedErr
 		})
 		if err != expectedErr {
@@ -117,7 +118,7 @@ func TestTryMap(t *testing.T) {
 func TestTryParallelMap(t *testing.T) {
 	t.Run("SmallDataset", func(t *testing.T) {
 		input := []int{1, 2, 3}
-		got, err := slices.TryParallelMap(input, func(x int) (int, error) {
+		got, err := sliceutil.TryParallelMap(input, func(x int) (int, error) {
 			return x * 2, nil
 		})
 		if err != nil {
@@ -134,7 +135,7 @@ func TestTryParallelMap(t *testing.T) {
 		for i := 0; i < count; i++ {
 			input[i] = i
 		}
-		got, err := slices.TryParallelMap(input, func(x int) (int, error) {
+		got, err := sliceutil.TryParallelMap(input, func(x int) (int, error) {
 			return x * 2, nil
 		})
 		if err != nil {
@@ -157,7 +158,7 @@ func TestTryParallelMap(t *testing.T) {
 		}
 		expectedErr := errors.New("oops")
 
-		_, err := slices.TryParallelMap(input, func(x int) (int, error) {
+		_, err := sliceutil.TryParallelMap(input, func(x int) (int, error) {
 			if x == 500 {
 				return 0, expectedErr
 			}
@@ -179,7 +180,7 @@ func TestTryParallelFilter(t *testing.T) {
 		}
 
 		// Keep even numbers
-		got, err := slices.TryParallelFilter(input, func(x int) (bool, error) {
+		got, err := sliceutil.TryParallelFilter(input, func(x int) (bool, error) {
 			return x%2 == 0, nil
 		})
 		if err != nil {
@@ -206,7 +207,7 @@ func TestTryParallelFilter(t *testing.T) {
 		}
 		expectedErr := errors.New("filter error")
 
-		_, err := slices.TryParallelFilter(input, func(x int) (bool, error) {
+		_, err := sliceutil.TryParallelFilter(input, func(x int) (bool, error) {
 			if x == 500 {
 				return false, expectedErr
 			}
@@ -236,13 +237,13 @@ func BenchmarkParallelFilter_HeavyWork(b *testing.B) {
 
 	b.Run("SerialFilter_Heavy", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			_, _ = slices.TryFilter(input, PredicateheavyPredicate)
+			_, _ = sliceutil.TryFilter(input, PredicateheavyPredicate)
 		}
 	})
 
 	b.Run("ParallelFilter_Heavy", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			_, _ = slices.TryParallelFilter(input, PredicateheavyPredicate)
+			_, _ = sliceutil.TryParallelFilter(input, PredicateheavyPredicate)
 		}
 	})
 }
@@ -264,13 +265,13 @@ func BenchmarkParallelMap_HeavyWork(b *testing.B) {
 
 	b.Run("SerialMap_Heavy", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			_, _ = slices.TryMap(input, heavyTransform)
+			_, _ = sliceutil.TryMap(input, heavyTransform)
 		}
 	})
 
 	b.Run("ParallelMap_Heavy", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			_, _ = slices.TryParallelMap(input, heavyTransform)
+			_, _ = sliceutil.TryParallelMap(input, heavyTransform)
 		}
 	})
 }

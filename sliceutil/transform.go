@@ -1,6 +1,7 @@
-package silces
+package sliceutil
 
 import (
+	"context"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -178,9 +179,19 @@ func TryReduce[T any, R any](collection []T, accumulator func(R, T) (R, error), 
 //  Concurrency (Advanced)
 // ==========================================
 
-// TryParallelMap uses concurrency to perform mapping with error handling.
-// Suitable for CPU-intensive or IO-intensive tasks with large data sets.
+// TryParallelMap is a convenience wrapper for TryParallelMapWithContext, using context.Background().
 func TryParallelMap[T any, R any](collection []T, transform func(T) (R, error)) ([]R, error) {
+	return TryParallelMapWithContext(context.Background(), collection, transform)
+}
+
+// TryParallelMapWithContext uses concurrency to perform mapping with error handling and context support.
+// Suitable for CPU-intensive or IO-intensive tasks with large data sets.
+func TryParallelMapWithContext[T any, R any](ctx context.Context, collection []T, transform func(T) (R, error)) ([]R, error) {
+	// Fast path for already canceled context
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	if len(collection) == 0 {
 		return []R{}, nil
 	}
@@ -188,7 +199,19 @@ func TryParallelMap[T any, R any](collection []T, transform func(T) (R, error)) 
 	// Performance threshold: if the data set is too small, fall back to serial execution to avoid goroutine scheduling overhead.
 	// This number depends on the specific task; here 256 is used as an empirical value.
 	if len(collection) < 256 {
-		return TryMap(collection, transform)
+		// Serial execution with context support
+		res := make([]R, len(collection))
+		for i, v := range collection {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			var err error
+			res[i], err = transform(v)
+			if err != nil {
+				return nil, err
+			}
+		}
+		return res, nil
 	}
 
 	res := make([]R, len(collection))
@@ -220,6 +243,15 @@ func TryParallelMap[T any, R any](collection []T, transform func(T) (R, error)) 
 					return
 				}
 
+				select {
+				case <-ctx.Done():
+					if atomic.CompareAndSwapInt32(&canceled, 0, 1) {
+						firstErr = ctx.Err()
+					}
+					return
+				default:
+				}
+
 				val, err := transform(collection[k])
 
 				if err != nil {
@@ -242,16 +274,42 @@ func TryParallelMap[T any, R any](collection []T, transform func(T) (R, error)) 
 	return res, nil
 }
 
-// TryParallelFilter uses concurrency to filter with error handling.
-// It maintains the relative order of elements.
+// TryParallelFilter is a convenience wrapper for TryParallelFilterWithContext, using context.Background().
 func TryParallelFilter[T any](collection []T, predicate func(T) (bool, error)) ([]T, error) {
+	return TryParallelFilterWithContext(context.Background(), collection, predicate)
+}
+
+// TryParallelFilterWithContext uses concurrency to filter with error handling and context support.
+// It maintains the relative order of elements.
+// Suitable for CPU-intensive or IO-intensive tasks with large data sets.
+func TryParallelFilterWithContext[T any](ctx context.Context, collection []T, predicate func(T) (bool, error)) ([]T, error) {
+	// Fast path for already canceled context
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	if len(collection) == 0 {
 		return []T{}, nil
 	}
 
 	// Performance threshold: if the data set is too small, fall back to serial execution to avoid goroutine scheduling overhead.
 	if len(collection) < 256 {
-		return TryFilter(collection, predicate)
+		// Serial execution with context support
+		// Use len(collection) as capacity to avoid reallocation for small sets
+		res := make([]T, 0, len(collection))
+		for _, v := range collection {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			keep, err := predicate(v)
+			if err != nil {
+				return nil, err
+			}
+			if keep {
+				res = append(res, v)
+			}
+		}
+		return res, nil
 	}
 
 	// Determine number of workers based on CPU cores
@@ -283,6 +341,14 @@ func TryParallelFilter[T any](collection []T, predicate func(T) (bool, error)) (
 			for k := s; k < e; k++ {
 				if atomic.LoadInt32(&canceled) == 1 {
 					return
+				}
+				select {
+				case <-ctx.Done():
+					if atomic.CompareAndSwapInt32(&canceled, 0, 1) {
+						firstErr = ctx.Err()
+					}
+					return
+				default:
 				}
 
 				keep, err := predicate(collection[k])
