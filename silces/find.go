@@ -1,4 +1,4 @@
-package slices
+package silces
 
 // Contains 判断切片是否包含目标元素。
 // 注意：T 必须是 comparable 的。

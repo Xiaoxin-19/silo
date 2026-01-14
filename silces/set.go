@@ -1,4 +1,4 @@
-package slices
+package silces
 
 // Intersection 返回两个切片的交集（共有的元素）。
 // 提示：使用 map[T]struct{} 来辅助去重和查找。
