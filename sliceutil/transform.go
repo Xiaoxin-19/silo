@@ -384,3 +384,45 @@ func TryParallelFilterWithContext[T any](ctx context.Context, collection []T, pr
 
 	return res, nil
 }
+
+// Chunk splits a slice into multiple chunks of specified size.
+// the original slices are used for each chunk.
+// The last chunk may be smaller if there are not enough elements.
+func Chunk[T any](collection []T, size int) [][]T {
+	if size <= 0 {
+		panic("sliceutil.Chunk: size must be greater than 0")
+	}
+	if len(collection) == 0 {
+		return [][]T{}
+	}
+	batchSize := (len(collection) + size - 1) / size
+	_ = collection[len(collection)-1]
+	res := make([][]T, 0, batchSize)
+	for i := 0; i < len(collection); i += size {
+		end := min(i+size, len(collection))
+		res = append(res, collection[i:end])
+	}
+	return res
+}
+
+// ChunkCopy splits a slice into multiple chunks of specified size,
+// creating new slices for each chunk.
+// The last chunk may be smaller if there are not enough elements.
+func ChunkCopy[T any](collection []T, size int) [][]T {
+	if size <= 0 {
+		panic("sliceutil.ChunkCopy: size must be greater than 0")
+	}
+	if len(collection) == 0 {
+		return [][]T{}
+	}
+	batchSize := (len(collection) + size - 1) / size
+	_ = collection[len(collection)-1]
+	res := make([][]T, 0, batchSize)
+	for i := 0; i < len(collection); i += size {
+		end := min(i+size, len(collection))
+		newChunk := make([]T, end-i)
+		copy(newChunk, collection[i:end])
+		res = append(res, newChunk)
+	}
+	return res
+}

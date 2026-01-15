@@ -12,7 +12,7 @@ module.exports = {
       2,
       'always',
       [
-        'silces',
+        'sliceutil',
         'list',
         'vector',
         'set',
