@@ -1,6 +1,10 @@
 package sliceutil
 
 // Intersection returns the intersection of two slices.
+// The result preserves the order of elements from the first slice (a).
+//
+// Memory Optimization: The function builds a map from the second slice (b).
+// If the order of the result is not important, consider passing the smaller slice as the second argument to reduce memory usage.
 func Intersection[T comparable](a, b []T) []T {
 	if len(a) == 0 || len(b) == 0 {
 		return []T{}

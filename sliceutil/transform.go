@@ -7,6 +7,18 @@ import (
 	"sync/atomic"
 )
 
+const minParallelThreshold = 256
+
+// shouldRunParallel decides whether to execute logic concurrently.
+// Design Rationale:
+//  1. Threshold: Small collections don't justify the overhead of goroutine scheduling.
+//  2. GOMAXPROCS: In containerized environments (K8s), NumCPU() reflects the host,
+//     while GOMAXPROCS reflects the effective quota. We must use GOMAXPROCS.
+//     Per Go docs, GOMAXPROCS is dynamic, so we query it every time.
+func shouldRunParallel(n int) bool {
+	return n >= minParallelThreshold && runtime.GOMAXPROCS(0) > 1
+}
+
 // ==========================================
 //  Pure Functions (Happy Path)
 // ==========================================
@@ -198,7 +210,7 @@ func TryParallelMapWithContext[T any, R any](ctx context.Context, collection []T
 
 	// Performance threshold: if the data set is too small, fall back to serial execution to avoid goroutine scheduling overhead.
 	// This number depends on the specific task; here 256 is used as an empirical value.
-	if len(collection) < 256 {
+	if !shouldRunParallel(len(collection)) {
 		// Serial execution with context support
 		res := make([]R, len(collection))
 		for i, v := range collection {
@@ -217,7 +229,7 @@ func TryParallelMapWithContext[T any, R any](ctx context.Context, collection []T
 	res := make([]R, len(collection))
 
 	// Determine number of workers based on CPU cores
-	numWorkers := runtime.NumCPU()
+	numWorkers := runtime.GOMAXPROCS(0)
 	chunkSize := (len(collection) + numWorkers - 1) / numWorkers
 
 	var wg sync.WaitGroup
@@ -293,7 +305,7 @@ func TryParallelFilterWithContext[T any](ctx context.Context, collection []T, pr
 	}
 
 	// Performance threshold: if the data set is too small, fall back to serial execution to avoid goroutine scheduling overhead.
-	if len(collection) < 256 {
+	if !shouldRunParallel(len(collection)) {
 		// Serial execution with context support
 		// Use len(collection) as capacity to avoid reallocation for small sets
 		res := make([]T, 0, len(collection))
@@ -313,7 +325,7 @@ func TryParallelFilterWithContext[T any](ctx context.Context, collection []T, pr
 	}
 
 	// Determine number of workers based on CPU cores
-	numWorkers := runtime.NumCPU()
+	numWorkers := runtime.GOMAXPROCS(0)
 	chunkSize := (len(collection) + numWorkers - 1) / numWorkers
 
 	var wg sync.WaitGroup
@@ -425,4 +437,151 @@ func ChunkCopy[T any](collection []T, size int) [][]T {
 		res = append(res, newChunk)
 	}
 	return res
+}
+
+// GroupBy groups elements of the collection based on the keySelector function.
+// the result is a map where keys are the results of keySelector and values are slices of elements that correspond to each key.
+// the slice order is preserved from the original collection.
+func GroupBy[T any, K comparable](collection []T, keySelector func(T) K) map[K][]T {
+	if keySelector == nil {
+		panic("sliceutil.GroupBy: keySelector is nil")
+	}
+
+	if len(collection) == 0 {
+		return map[K][]T{}
+	}
+
+	// use len(collection)/2 as a heuristic for initial map size
+	result := make(map[K][]T, len(collection)/2)
+
+	// BCE hint: avoid bounds check in loop
+	_ = collection[len(collection)-1]
+	for _, item := range collection {
+		key := keySelector(item)
+		result[key] = append(result[key], item)
+	}
+	return result
+}
+
+// Flatten flattens a slice of slices into a single slice.
+// TODO: Benchmark against slices.Concat (Go 1.22+) and consider refactoring.
+func Flatten[T any](collection [][]T) []T {
+	if len(collection) == 0 {
+		return []T{}
+	}
+
+	// Calculate total length
+	count := 0
+	_ = collection[len(collection)-1]
+	for _, item := range collection {
+		count += len(item)
+	}
+
+	// Pre-allocate result slice
+	result := make([]T, count)
+	idx := 0
+	for _, item := range collection {
+		copy(result[idx:], item)
+		idx += len(item)
+	}
+	return result
+}
+
+// Reverse returns a new slice with the elements in reverse order.
+func Reverse[T any](collection []T) []T {
+	if len(collection) == 0 {
+		return []T{}
+	}
+
+	// Pre-allocate result slice
+	colLen := len(collection)
+	result := make([]T, colLen)
+	// BCE hint: avoid bounds check in loop
+	_ = collection[len(collection)-1]
+	for i, item := range collection {
+		result[colLen-1-i] = item
+	}
+	return result
+}
+
+// ReverseInPlace reverses the elements of the slice in place.
+func ReverseInPlace[T any](collection []T) []T {
+	if len(collection) == 0 {
+		return collection
+	}
+
+	_ = collection[len(collection)-1]
+	colLen := len(collection)
+	for i := 0; i < colLen/2; i++ {
+		collection[i], collection[colLen-1-i] = collection[colLen-1-i], collection[i]
+	}
+	return collection
+}
+
+// Partition splits the collection into two slices based on the predicate.
+// The first slice contains elements that satisfy the predicate,
+// while the second slice contains elements that do not.
+// The order of elements in both slices is preserved from the original collection.
+// The return slices are newly allocated with exact capacity.
+//
+// Performance Note: This function uses a two-pass approach to minimize allocations.
+// Therefore, the predicate MUST be a pure function (no side effects), as it will be executed twice for each element.
+func Partition[T any](collection []T, predicate func(T) bool) (matched []T, unmatched []T) {
+	if len(collection) == 0 {
+		return []T{}, []T{}
+	}
+	if predicate == nil {
+		panic("sliceutil.Partition: predicate is nil")
+	}
+	_ = collection[len(collection)-1]
+	matchCnt := 0
+	for _, item := range collection {
+		if predicate(item) {
+			matchCnt++
+		}
+	}
+	matched = make([]T, matchCnt)
+	unmatched = make([]T, len(collection)-matchCnt)
+	matchedIdx := 0
+	unmatchedIdx := 0
+	for _, item := range collection {
+		if predicate(item) {
+			matched[matchedIdx] = item
+			matchedIdx++
+		} else {
+			unmatched[unmatchedIdx] = item
+			unmatchedIdx++
+		}
+	}
+	return matched, unmatched
+}
+
+// PartitionInPlace splits the collection into two slices based on the predicate,
+// The first slice contains elements that satisfy the predicate,
+// while the second slice contains elements that do not.
+//
+// Note:
+//   - The order of elements in both slices is not guaranteed to be preserved.
+//   - It modifies the underlying array of the original slice.
+func PartitionInPlace[T any](collection []T, predicate func(T) bool) (matched []T, unmatched []T) {
+	if len(collection) == 0 {
+		return collection, collection[:0]
+	}
+	if predicate == nil {
+		panic("sliceutil.PartitionInPlace: predicate is nil")
+	}
+	colLen := len(collection)
+	_ = collection[colLen-1]
+	matchedIdx := 0
+	unmatchedIdx := colLen - 1
+
+	for matchedIdx <= unmatchedIdx {
+		if predicate(collection[matchedIdx]) {
+			matchedIdx++
+		} else {
+			collection[matchedIdx], collection[unmatchedIdx] = collection[unmatchedIdx], collection[matchedIdx]
+			unmatchedIdx--
+		}
+	}
+	return collection[:matchedIdx], collection[matchedIdx:]
 }
