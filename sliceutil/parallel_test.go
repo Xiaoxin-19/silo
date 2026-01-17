@@ -94,3 +94,108 @@ func FuzzTryParallelMap(f *testing.F) {
 		}
 	})
 }
+
+func TestTryParallelMap(t *testing.T) {
+	t.Run("SmallDataset", func(t *testing.T) {
+		input := []int{1, 2, 3}
+		got, err := sliceutil.TryParallelMap(input, func(x int) (int, error) {
+			return x * 2, nil
+		})
+		if err != nil {
+			t.Fatalf("Unexpected error: %v", err)
+		}
+		if !reflect.DeepEqual(got, []int{2, 4, 6}) {
+			t.Errorf("SmallDataset: got %v", got)
+		}
+	})
+
+	t.Run("LargeDataset", func(t *testing.T) {
+		count := 1000
+		input := make([]int, count)
+		for i := 0; i < count; i++ {
+			input[i] = i
+		}
+		got, err := sliceutil.TryParallelMap(input, func(x int) (int, error) {
+			return x * 2, nil
+		})
+		if err != nil {
+			t.Fatalf("Unexpected error: %v", err)
+		}
+		if len(got) != count {
+			t.Fatalf("Length mismatch: got %d, want %d", len(got), count)
+		}
+		// Simple sampling verification
+		if got[0] != 0 || got[count-1] != (count-1)*2 {
+			t.Errorf("Value mismatch")
+		}
+	})
+
+	t.Run("ErrorHandling", func(t *testing.T) {
+		count := 1000
+		input := make([]int, count)
+		for i := 0; i < count; i++ {
+			input[i] = i
+		}
+		expectedErr := errors.New("oops")
+
+		_, err := sliceutil.TryParallelMap(input, func(x int) (int, error) {
+			if x == 500 {
+				return 0, expectedErr
+			}
+			return x * 2, nil
+		})
+
+		if err != expectedErr {
+			t.Errorf("Expected error %v, got %v", expectedErr, err)
+		}
+	})
+}
+
+func TestTryParallelFilter(t *testing.T) {
+	t.Run("OrderAndCorrectness", func(t *testing.T) {
+		count := 1000
+		input := make([]int, count)
+		for i := 0; i < count; i++ {
+			input[i] = i
+		}
+
+		// Keep even numbers
+		got, err := sliceutil.TryParallelFilter(input, func(x int) (bool, error) {
+			return x%2 == 0, nil
+		})
+		if err != nil {
+			t.Fatalf("Unexpected error: %v", err)
+		}
+
+		if len(got) != 500 {
+			t.Fatalf("Expected 500 elements, got %d", len(got))
+		}
+
+		// Verify order and values
+		for i, v := range got {
+			if v != i*2 {
+				t.Errorf("Mismatch at index %d: got %d, want %d", i, v, i*2)
+				break
+			}
+		}
+	})
+
+	t.Run("ErrorHandling", func(t *testing.T) {
+		input := make([]int, 1000)
+		for i := range input {
+			input[i] = i
+		}
+		expectedErr := errors.New("filter error")
+
+		_, err := sliceutil.TryParallelFilter(input, func(x int) (bool, error) {
+			if x == 500 {
+				return false, expectedErr
+			}
+			return true, nil
+		})
+
+		if err != expectedErr {
+			t.Errorf("Expected error %v, got %v", expectedErr, err)
+		}
+	})
+}
