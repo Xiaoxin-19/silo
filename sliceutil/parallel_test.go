@@ -48,7 +48,6 @@ func FuzzTryParallelFilter(f *testing.F) {
 		}
 	})
 }
-
 func FuzzTryParallelMap(f *testing.F) {
 	// 1. Seed Corpus
 	// Case 1: Small slice, no error

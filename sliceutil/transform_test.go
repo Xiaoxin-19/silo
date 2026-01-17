@@ -9,112 +9,6 @@ import (
 	"silo/sliceutil"
 )
 
-func TestFilter(t *testing.T) {
-	input := []int{1, 2, 3, 4, 5, 6}
-	want := []int{2, 4, 6}
-	got := sliceutil.Filter(input, func(x int) bool {
-		return x%2 == 0
-	})
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("Filter() = %v, want %v", got, want)
-	}
-}
-
-func TestFilterInPlace(t *testing.T) {
-	input := []int{1, 2, 3, 4, 5, 6}
-	want := []int{2, 4, 6}
-
-	got := sliceutil.FilterInPlace(input, func(x int) bool {
-		return x%2 == 0
-	})
-
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("FilterInPlace() = %v, want %v", got, want)
-	}
-
-	// Verify that the underlying array has been modified
-	if input[0] != 2 || input[1] != 4 || input[2] != 6 {
-		t.Errorf("Underlying array not modified correctly: %v", input)
-	}
-}
-
-func TestMap(t *testing.T) {
-	input := []int{1, 2, 3}
-	want := []string{"1", "2", "3"}
-	got := sliceutil.Map(input, func(x int) string {
-		return fmt.Sprintf("%d", x)
-	})
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("Map() = %v, want %v", got, want)
-	}
-}
-
-func TestReduce(t *testing.T) {
-	input := []int{1, 2, 3, 4}
-	want := 10
-	got := sliceutil.Reduce(input, func(acc, item int) int {
-		return acc + item
-	}, 0)
-	if got != want {
-		t.Errorf("Reduce() = %v, want %v", got, want)
-	}
-}
-
-func TestTryFilter(t *testing.T) {
-	t.Run("Success", func(t *testing.T) {
-		input := []int{1, 2, 3}
-		got, err := sliceutil.TryFilter(input, func(x int) (bool, error) {
-			return x > 1, nil
-		})
-		if err != nil {
-			t.Fatalf("Unexpected error: %v", err)
-		}
-		if !reflect.DeepEqual(got, []int{2, 3}) {
-			t.Errorf("TryFilter() = %v, want %v", got, []int{2, 3})
-		}
-	})
-
-	t.Run("Error", func(t *testing.T) {
-		input := []int{1, 2, 3}
-		expectedErr := errors.New("fail")
-		_, err := sliceutil.TryFilter(input, func(x int) (bool, error) {
-			if x == 2 {
-				return false, expectedErr
-			}
-			return true, nil
-		})
-		if err != expectedErr {
-			t.Errorf("TryFilter() error = %v, want %v", err, expectedErr)
-		}
-	})
-}
-
-func TestTryMap(t *testing.T) {
-	t.Run("Success", func(t *testing.T) {
-		input := []int{1, 2}
-		got, err := sliceutil.TryMap(input, func(x int) (int, error) {
-			return x * 2, nil
-		})
-		if err != nil {
-			t.Fatalf("Unexpected error: %v", err)
-		}
-		if !reflect.DeepEqual(got, []int{2, 4}) {
-			t.Errorf("TryMap() = %v, want %v", got, []int{2, 4})
-		}
-	})
-
-	t.Run("Error", func(t *testing.T) {
-		input := []int{1, 2}
-		expectedErr := errors.New("fail")
-		_, err := sliceutil.TryMap(input, func(x int) (int, error) {
-			return 0, expectedErr
-		})
-		if err != expectedErr {
-			t.Errorf("TryMap() error = %v, want %v", err, expectedErr)
-		}
-	})
-}
-
 func TestGroupBy(t *testing.T) {
 	type User struct {
 		ID   int
@@ -315,6 +209,111 @@ func TestPartitionInPlace(t *testing.T) {
 		}
 		if !isModified {
 			t.Error("Original slice was not modified in place")
+		}
+	})
+}
+func TestFilter(t *testing.T) {
+	input := []int{1, 2, 3, 4, 5, 6}
+	want := []int{2, 4, 6}
+	got := sliceutil.Filter(input, func(x int) bool {
+		return x%2 == 0
+	})
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Filter() = %v, want %v", got, want)
+	}
+}
+
+func TestFilterInPlace(t *testing.T) {
+	input := []int{1, 2, 3, 4, 5, 6}
+	want := []int{2, 4, 6}
+
+	got := sliceutil.FilterInPlace(input, func(x int) bool {
+		return x%2 == 0
+	})
+
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("FilterInPlace() = %v, want %v", got, want)
+	}
+
+	// Verify that the underlying array has been modified
+	if input[0] != 2 || input[1] != 4 || input[2] != 6 {
+		t.Errorf("Underlying array not modified correctly: %v", input)
+	}
+}
+
+func TestMap(t *testing.T) {
+	input := []int{1, 2, 3}
+	want := []string{"1", "2", "3"}
+	got := sliceutil.Map(input, func(x int) string {
+		return fmt.Sprintf("%d", x)
+	})
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Map() = %v, want %v", got, want)
+	}
+}
+
+func TestReduce(t *testing.T) {
+	input := []int{1, 2, 3, 4}
+	want := 10
+	got := sliceutil.Reduce(input, func(acc, item int) int {
+		return acc + item
+	}, 0)
+	if got != want {
+		t.Errorf("Reduce() = %v, want %v", got, want)
+	}
+}
+
+func TestTryFilter(t *testing.T) {
+	t.Run("Success", func(t *testing.T) {
+		input := []int{1, 2, 3}
+		got, err := sliceutil.TryFilter(input, func(x int) (bool, error) {
+			return x > 1, nil
+		})
+		if err != nil {
+			t.Fatalf("Unexpected error: %v", err)
+		}
+		if !reflect.DeepEqual(got, []int{2, 3}) {
+			t.Errorf("TryFilter() = %v, want %v", got, []int{2, 3})
+		}
+	})
+
+	t.Run("Error", func(t *testing.T) {
+		input := []int{1, 2, 3}
+		expectedErr := errors.New("fail")
+		_, err := sliceutil.TryFilter(input, func(x int) (bool, error) {
+			if x == 2 {
+				return false, expectedErr
+			}
+			return true, nil
+		})
+		if err != expectedErr {
+			t.Errorf("TryFilter() error = %v, want %v", err, expectedErr)
+		}
+	})
+}
+
+func TestTryMap(t *testing.T) {
+	t.Run("Success", func(t *testing.T) {
+		input := []int{1, 2}
+		got, err := sliceutil.TryMap(input, func(x int) (int, error) {
+			return x * 2, nil
+		})
+		if err != nil {
+			t.Fatalf("Unexpected error: %v", err)
+		}
+		if !reflect.DeepEqual(got, []int{2, 4}) {
+			t.Errorf("TryMap() = %v, want %v", got, []int{2, 4})
+		}
+	})
+
+	t.Run("Error", func(t *testing.T) {
+		input := []int{1, 2}
+		expectedErr := errors.New("fail")
+		_, err := sliceutil.TryMap(input, func(x int) (int, error) {
+			return 0, expectedErr
+		})
+		if err != expectedErr {
+			t.Errorf("TryMap() error = %v, want %v", err, expectedErr)
 		}
 	})
 }

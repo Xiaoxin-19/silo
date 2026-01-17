@@ -13,6 +13,7 @@ module.exports = {
       'always',
       [
         'sliceutil',
+        'seqs',
         'list',
         'vector',
         'set',

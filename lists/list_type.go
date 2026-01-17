@@ -1,5 +1,7 @@
 package lists
 
+import "iter"
+
 // List Defines a generic list interface supporting common list operations.
 // T can be any type.
 type List[T any] interface {
@@ -50,27 +52,7 @@ type List[T any] interface {
 	// -------------------------------------------------------
 	// Transformation & Iteration
 	// -------------------------------------------------------
-
-	// ToSlice converts the list to a native slice
-	// This is an "escape hatch" method for users to fall back to standard library operations
-	ToSlice() []T
-
-	// Iterator returns an iterator for efficient traversal (mainly for LinkedList)
-	Iterator() Iterator[T]
-}
-
-// Iterator defines the behavior of an iterator
-// Allows users to traverse using for it.Next() without worrying about whether the underlying structure is an array or a linked list
-type Iterator[T any] interface {
-	// HasNext checks if there is a next element
-	HasNext() bool
-
-	// Next returns the current element and advances the cursor to the next position
-	// If there are no elements, the behavior is undefined (usually panic or return zero value, recommended to be decided by the implementation)
-	Next() T
-
-	// Index returns the index of the current element (optional but useful in some scenarios)
-	Index() int
+	All() iter.Seq[T]
 }
 
 // FindIndex 是一个独立的函数，不是 List 的方法
