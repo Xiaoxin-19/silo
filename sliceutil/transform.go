@@ -3,6 +3,7 @@ package sliceutil
 import (
 	"context"
 	"runtime"
+	"slices"
 	"sync"
 	"sync/atomic"
 )
@@ -103,46 +104,24 @@ func PartitionInPlace[T any](collection []T, predicate func(T) bool) (matched []
 	return collection[:matchedIdx], collection[matchedIdx:]
 }
 
-// filter
+// Filter returns a new slice containing elements that satisfy the predicate.
 func Filter[T any](collection []T, predicate func(T) bool) []T {
 	if len(collection) == 0 {
 		return []T{}
 	}
-	// BCE hint: avoid bounds check in loop
-	_ = collection[len(collection)-1]
-
-	// Heuristic pre-allocation of capacity
-	res := make([]T, 0, len(collection)/2)
-	for _, v := range collection {
-		if predicate(v) {
-			res = append(res, v)
-		}
-	}
-	return res
+	copySlice := make([]T, len(collection))
+	copy(copySlice, collection)
+	return FilterInPlace(copySlice, predicate)
 }
 
 // FilterInPlace in-place filters the slice with zero memory allocation.
 // Note: It modifies the underlying array of the original slice.
 func FilterInPlace[T any](collection []T, predicate func(T) bool) []T {
-	if len(collection) == 0 {
-		return collection
-	}
-	_ = collection[len(collection)-1]
-
-	idx := 0
-	for i, v := range collection {
-		if predicate(v) {
-			if i != idx {
-				collection[idx] = v
-			}
-			idx++
-		}
-	}
-
-	// allow GC to reclaim memory
-	clear(collection[idx:])
-
-	return collection[:idx]
+	// Use standard library implementation for best performance.
+	// Invert predicate because DeleteFunc deletes when true, but Filter keeps when true.
+	return slices.DeleteFunc(collection, func(t T) bool {
+		return !predicate(t)
+	})
 }
 
 // Map transforms a slice of type T to a slice of type R.

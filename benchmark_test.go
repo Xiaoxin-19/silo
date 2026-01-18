@@ -144,7 +144,12 @@ func BenchmarkUnified_Filter(b *testing.B) {
 						for range seqs.ParallelTryFilter(slices.Values(input), wl.predicateErr, seqs.WithContext(b.Context())) {
 						}
 						if wl.name == "Light" {
-							for range seqs.ParallelTryFilter(slices.Values(input), wl.predicateErr, seqs.WithContext(b.Context()), seqs.WithBatchSize(1024)) {
+							count := 0
+							for v, err := range seqs.ParallelTryFilter(slices.Values(input), wl.predicateErr, seqs.WithContext(b.Context()), seqs.WithBatchSize(1024)) {
+								count += v
+								if err != nil {
+									b.Fatal(err)
+								}
 							}
 						}
 					}
