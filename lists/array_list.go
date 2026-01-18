@@ -32,15 +32,19 @@ func (al *ArrayList[T]) Insert(index int, value T) error {
 		return ErrIndexOutOfBounds
 	}
 
-	var zero T
-	al.data = append(al.data, zero)
+	// Capacity Management
+	al.data = slices.Grow(al.data, 1)
+	// Length Adjustment
+	al.data = al.data[:len(al.data)+1]
+	// Make Space (Data Shift)
 	copy(al.data[index+1:], al.data[index:])
+	// Insert new value
 	al.data[index] = value
 	return nil
 }
 
 // InsertAll inserts multiple elements at the specified index.
-// Optimization: Performs exactly ONE allocation (if needed) and ONE memory shift.
+// This shifts existing elements to the right.
 func (l *ArrayList[T]) InsertAll(index int, values ...T) error {
 	if index < 0 || index > len(l.data) {
 		return ErrIndexOutOfBounds
@@ -51,37 +55,17 @@ func (l *ArrayList[T]) InsertAll(index int, values ...T) error {
 		return nil
 	}
 
-	// calculate new length
-	oldLen := len(l.data)
-	newLen := oldLen + n
+	// Capacity Management
+	l.data = slices.Grow(l.data, n)
 
-	//  grow underlying array if needed
-	if newLen > cap(l.data) {
-		newCap := max(newLen, 2*oldLen)
+	// Length Adjustment
+	l.data = l.data[:len(l.data)+n]
 
-		// allocate new array
-		newItems := make([]T, newLen, newCap)
+	// Make Space (Data Shift)
+	copy(l.data[index+n:], l.data[index:])
 
-		// convey data
-		// [0...index] -> [0...index]
-		copy(newItems, l.data[:index])
-		// [index...] -> [index+n...] (leave a gap in the middle)
-		copy(newItems[index+n:], l.data[index:])
-
-		// fill in new values
-		copy(newItems[index:], values)
-		l.data = newItems
-	} else {
-		// enough capacity, in-place shift
-		// resize to new length, to allow copy to work
-		l.data = l.data[:newLen]
-
-		// convey old data to make room
-		// copy treats overlapping regions correctly
-		copy(l.data[index+n:], l.data[index:])
-		// fill in new values
-		copy(l.data[index:], values)
-	}
+	// Copy new values in place
+	copy(l.data[index:], values)
 
 	return nil
 }
@@ -166,6 +150,8 @@ func (al *ArrayList[T]) Last() (T, error) {
 func (al *ArrayList[T]) RemoveIf(predicate func(T) bool) int {
 	oldLen := len(al.data)
 	al.data = slices.DeleteFunc(al.data, predicate)
+	// Clear the tail to prevent memory leaks, as slices.DeleteFunc doesn't do it.
+	clear(al.data[len(al.data):oldLen])
 	return oldLen - len(al.data)
 }
 
