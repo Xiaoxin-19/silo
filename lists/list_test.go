@@ -286,10 +286,10 @@ func RunListTests(t *testing.T, name string, factory func(vals ...int) lists.Lis
 		}
 
 		// RemoveIf (remove odd numbers)
-		newLen := l.RemoveIf(func(x int) bool { return x%2 != 0 })
+		removedCount := l.RemoveIf(func(x int) bool { return x%2 != 0 })
 		// Removed 1, 3, 5. Remaining: 2, 4.
-		if newLen != 2 {
-			t.Errorf("RemoveIf returned length %d, want 2", newLen)
+		if removedCount != 3 {
+			t.Errorf("RemoveIf returned count %d, want 3", removedCount)
 		}
 		if l.Size() != 2 {
 			t.Errorf("Size after RemoveIf = %d, want 2", l.Size())

@@ -38,6 +38,7 @@ type List[T any] interface {
 	// --- Bulk & Functional Operations ---
 	// RemoveIf removes all elements satisfying the predicate.
 	// This allows O(N) filtering for both ArrayList and LinkedList.
+	// Returns the number of removed elements.
 	RemoveIf(predicate func(T) bool) int
 	// Sort sorts the list in-place.
 	// implementation chooses the best algorithm (QuickSort for Array, MergeSort for Linked).

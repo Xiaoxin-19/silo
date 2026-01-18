@@ -86,10 +86,9 @@ func (l *ArrayList[T]) InsertAll(index int, values ...T) error {
 	return nil
 }
 
-func (al *ArrayList[T]) Get(index int) (T, error) {
+func (al *ArrayList[T]) Get(index int) (val T, err error) {
 	if index < 0 || index >= len(al.data) {
-		var zero T
-		return zero, ErrIndexOutOfBounds
+		return val, ErrIndexOutOfBounds
 	}
 	return al.data[index], nil
 }
@@ -161,9 +160,13 @@ func (al *ArrayList[T]) Last() (T, error) {
 	return al.Get(len(al.data) - 1)
 }
 
+// RemoveIf removes all elements satisfying the predicate.
+// This allows O(N) filtering for both ArrayList and LinkedList.
+// Returns the number of removed elements.
 func (al *ArrayList[T]) RemoveIf(predicate func(T) bool) int {
+	oldLen := len(al.data)
 	al.data = slices.DeleteFunc(al.data, predicate)
-	return len(al.data)
+	return oldLen - len(al.data)
 }
 
 func (al *ArrayList[T]) Sort(compare func(a, b T) int) {
