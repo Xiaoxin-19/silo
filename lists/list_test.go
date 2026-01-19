@@ -356,3 +356,42 @@ func TestArrayList(t *testing.T) {
 		return l
 	})
 }
+
+func TestLinkedList(t *testing.T) {
+	RunListTests(t, "LinkedList", func(vals ...int) lists.List[int] {
+		l := lists.NewLinkedList[int]()
+		l.Add(vals...)
+		return l
+	})
+}
+
+
+func TestLinkedList_Specifics(t *testing.T) {
+	t.Run("String", func(t *testing.T) {
+		l := lists.NewLinkedList[int]()
+		l.Add(1, 2)
+		if s := l.String(); s != "[1, 2]" {
+			t.Errorf("String() = %q, want \"[1, 2]\"", s)
+		}
+	})
+
+	t.Run("Clone", func(t *testing.T) {
+		l := lists.NewLinkedList[int]()
+		l.Add(1, 2, 3)
+		clone := l.Clone()
+
+		if l.Size() != clone.Size() {
+			t.Errorf("Clone size mismatch: got %d, want %d", clone.Size(), l.Size())
+		}
+		if !slices.Equal(slices.Collect(l.Values()), slices.Collect(clone.Values())) {
+			t.Error("Clone content mismatch")
+		}
+
+		// Verify independence
+		l.Set(0, 99)
+		v, _ := clone.Get(0)
+		if v == 99 {
+			t.Error("Clone should be independent of original")
+		}
+	})
+}
