@@ -31,10 +31,7 @@ func NewLinkedList[T any]() *LinkedList[T] {
 		size:         0,
 	}
 	ll.headSentinel.next = ll.tailSentinel
-	ll.headSentinel.prev = ll.tailSentinel
-
 	ll.tailSentinel.prev = ll.headSentinel
-	ll.tailSentinel.next = ll.headSentinel
 	return ll
 }
 
@@ -240,22 +237,97 @@ func (ll *LinkedList[T]) RemoveIf(predicate func(T) bool) int {
 
 // Sort sorts the list in-place.
 // implementation chooses the best algorithm (QuickSort for Array, MergeSort for Linked).
+// the resulting list is stable.
 func (ll *LinkedList[T]) Sort(compare func(a, b T) int) {
 	if ll.size < 2 {
 		return
 	}
 
-	vals := make([]T, 0, ll.size)
-	for v := range ll.Values() {
-		vals = append(vals, v)
+	// Optimization: Use slice-based sort for small datasets (e.g. < 64).
+	// This improves cache locality and avoids pointer chasing overhead.
+	// We use SortStableFunc to maintain the stability guarantee of MergeSort.
+	if ll.size < 64 {
+		vals := make([]T, 0, ll.size)
+		current := ll.headSentinel.next
+		for current != ll.tailSentinel {
+			vals = append(vals, current.val)
+			current = current.next
+		}
+		slices.SortStableFunc(vals, compare)
+		current = ll.headSentinel.next
+		for _, v := range vals {
+			current.val = v
+			current = current.next
+		}
+		return
 	}
-	slices.SortFunc(vals, compare)
 
-	current := ll.headSentinel.next
-	for _, v := range vals {
-		current.val = v
+	// 1. Detach the list from sentinels to treat as a simple chain
+	first := ll.headSentinel.next
+	ll.tailSentinel.prev.next = nil // Break the link to tailSentinel
+
+	// 2. Perform Merge Sort
+	sortedHead := mergeSort(first, compare)
+
+	// 3. Reconstruct the doubly linked list (fix prev pointers and sentinels)
+	current := sortedHead
+	prev := ll.headSentinel
+	ll.headSentinel.next = current
+
+	for current != nil {
+		current.prev = prev
+		prev = current
 		current = current.next
 	}
+
+	// Fix tail sentinel
+	prev.next = ll.tailSentinel
+	ll.tailSentinel.prev = prev
+}
+
+func mergeSort[T any](head *node[T], compare func(a, b T) int) *node[T] {
+	if head == nil || head.next == nil {
+		return head
+	}
+
+	// Find middle using slow/fast pointers
+	slow, fast := head, head.next
+	for fast != nil && fast.next != nil {
+		slow = slow.next
+		fast = fast.next.next
+	}
+
+	mid := slow.next
+	slow.next = nil // Split the list
+
+	left := mergeSort(head, compare)
+	right := mergeSort(mid, compare)
+
+	return merge(left, right, compare)
+}
+
+func merge[T any](a, b *node[T], compare func(a, b T) int) *node[T] {
+	dummy := &node[T]{}
+	tail := dummy
+
+	for a != nil && b != nil {
+		if compare(a.val, b.val) <= 0 {
+			tail.next = a
+			a = a.next
+		} else {
+			tail.next = b
+			b = b.next
+		}
+		tail = tail.next
+	}
+
+	if a != nil {
+		tail.next = a
+	} else {
+		tail.next = b
+	}
+
+	return dummy.next
 }
 
 func (ll *LinkedList[T]) Size() int {
