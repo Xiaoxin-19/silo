@@ -13,11 +13,6 @@ type node[T any] struct {
 	val  T
 }
 
-type LinkedListIterator[T any] struct {
-	current *node[T]
-	list    *LinkedList[T]
-}
-
 type LinkedList[T any] struct {
 	headSentinel *node[T]
 	tailSentinel *node[T]
@@ -36,6 +31,7 @@ func NewLinkedList[T any]() *LinkedList[T] {
 }
 
 // insertNodeAt insert newNode after indexNode
+// Bounds checking should be done by the caller.
 func (ll *LinkedList[T]) insertNodeAt(indexNode *node[T], newNode *node[T]) {
 	newNode.prev = indexNode
 	newNode.next = indexNode.next
@@ -68,6 +64,8 @@ func (ll *LinkedList[T]) findNodeAt(index int) *node[T] {
 }
 
 // removeNode removes the specified node from the list and returns its value.
+// Bounds checking should be done by the caller.
+// After removal, the node's pointers are cleared to help with garbage collection, value is zeroed.
 func (ll *LinkedList[T]) removeNode(targetNode *node[T]) T {
 	targetNode.prev.next = targetNode.next
 	targetNode.next.prev = targetNode.prev
