@@ -435,12 +435,12 @@ func (ll *LinkedList[T]) String() string {
 // Clone returns a shallow copy of the list.
 // It allocates new nodes and copies the elements.
 // Note: If T is a pointer or reference type, the referenced data is shared.
-func (ll *LinkedList[T]) Clone() LinkedList[T] {
+func (ll *LinkedList[T]) Clone() *LinkedList[T] {
 	clone := NewLinkedList[T]()
 	current := ll.headSentinel.next
 	for current != ll.tailSentinel {
 		clone.Add(current.val)
 		current = current.next
 	}
-	return *clone
+	return clone
 }

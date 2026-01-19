@@ -182,7 +182,7 @@ func (al *ArrayList[T]) ResizeToFit() {
 // Clone returns a shallow copy of the list.
 // It allocates a new underlying slice and copies the elements.
 // Note: If T is a pointer or reference type, the referenced data is shared.
-func (l *ArrayList[T]) Clone() List[T] {
+func (l *ArrayList[T]) Clone() *ArrayList[T] {
 	newItems := make([]T, len(l.data))
 
 	copy(newItems, l.data)
