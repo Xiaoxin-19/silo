@@ -134,16 +134,19 @@ func (llc *LinkedListCursor[T]) Remove() (val T, err error) {
 	return val, nil
 }
 
-// InsertAfter inserts a new element after the current cursor position
-// If the cursor is invalid, it returns an error
-// If want insert elem to blank list, use InsertBefore on tailSentinel cursor
+// InsertAfter inserts a new value immediately after the cursor's current position.
+// Note: Allows insertion after the Head Sentinel (effectively prepending to the list),
+// even though the cursor is technically invalid in that state.
+//
 // Example:
 //
-//	l := lists.NewLinkedList[int]()
-//	c := l.BackCursor() // points to tailSentinel
-//	c.InsertBefore(1)   // inserts 1 into the empty list
+//	cursor := list.BackCursor() // invalid cursor at head sentinel
+//	cursor.InsertAfter(10)      // inserts 10 at the front of the list
 func (llc *LinkedListCursor[T]) InsertAfter(value T) error {
-	if !llc.IsValid() {
+	if llc.list == nil {
+		return ErrInvalidOperation
+	}
+	if !llc.IsValid() && llc.current != llc.list.headSentinel {
 		return ErrInvalidOperation
 	}
 	newNode := &node[T]{val: value}
@@ -151,9 +154,17 @@ func (llc *LinkedListCursor[T]) InsertAfter(value T) error {
 	return nil
 }
 
-// InsertBefore inserts a new element before the current cursor position
-// If the cursor is invalid, it returns an error
+// InsertBefore inserts a new value immediately before the cursor's current position.
+// Note: Allows insertion before the Tail Sentinel (effectively appending to the list),
+// even though the cursor is technically invalid in that state.
+// Example:
+//
+//	cursor := list.FrontCursor() // invalid cursor at tail sentinel
+//	cursor.InsertBefore(20)      // inserts 20 at the end of the list
 func (llc *LinkedListCursor[T]) InsertBefore(value T) error {
+	if llc.list == nil {
+		return ErrInvalidOperation
+	}
 	// Allow inserting before a valid element OR before the tail sentinel (append)
 	if !llc.IsValid() && llc.current != llc.list.tailSentinel {
 		return ErrInvalidOperation
