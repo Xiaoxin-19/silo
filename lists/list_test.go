@@ -1,8 +1,10 @@
 package lists_test
 
 import (
+	"runtime"
 	"slices"
 	"testing"
+	"time"
 
 	"silo/lists"
 )
@@ -309,6 +311,69 @@ func RunListTests(t *testing.T, name string, factory func(vals ...int) lists.Lis
 	})
 }
 
+func TestLinkedList_MemoryLeaks(t *testing.T) {
+	// Tracker 用于验证对象是否被 GC 回收
+	type Tracker struct {
+		id int
+	}
+
+	// 辅助函数：执行操作并验证目标对象是否被回收
+	checkLeak := func(t *testing.T, name string, action func(l *lists.LinkedList[*Tracker], item *Tracker)) {
+		t.Helper()
+		l := lists.NewLinkedList[*Tracker]()
+		finalized := make(chan int, 1)
+		item := &Tracker{id: 1}
+
+		// 设置 Finalizer，当 item 被回收时发送信号
+		runtime.SetFinalizer(item, func(obj *Tracker) {
+			finalized <- obj.id
+		})
+
+		l.Add(item)
+
+		// 执行移除操作
+		action(l, item)
+
+		// 移除本地引用，确保只有 List 持有（或曾经持有）该对象
+		item = nil
+
+		// 强制 GC。通常一次 GC 足够，但为了保险可以多次或稍作等待
+		runtime.GC()
+		runtime.GC()
+
+		select {
+		case <-finalized:
+			// Pass: 对象已被回收
+		case <-time.After(200 * time.Millisecond):
+			t.Errorf("%s: 对象未被 GC 回收，可能存在内存泄漏 (节点引用未断开)", name)
+		}
+	}
+
+	t.Run("Remove", func(t *testing.T) {
+		checkLeak(t, "Remove", func(l *lists.LinkedList[*Tracker], item *Tracker) {
+			l.Remove(0)
+		})
+	})
+
+	t.Run("Clear", func(t *testing.T) {
+		checkLeak(t, "Clear", func(l *lists.LinkedList[*Tracker], item *Tracker) {
+			l.Clear()
+		})
+	})
+
+	t.Run("RemoveRange", func(t *testing.T) {
+		checkLeak(t, "RemoveRange", func(l *lists.LinkedList[*Tracker], item *Tracker) {
+			l.RemoveRange(0, 1)
+		})
+	})
+
+	t.Run("RemoveIf", func(t *testing.T) {
+		checkLeak(t, "RemoveIf", func(l *lists.LinkedList[*Tracker], item *Tracker) {
+			l.RemoveIf(func(v *Tracker) bool { return v.id == 1 })
+		})
+	})
+}
+
 func TestArrayList_Specifics(t *testing.T) {
 	t.Run("Clone", func(t *testing.T) {
 		l := lists.NewArrayList[int](10)
@@ -354,5 +419,43 @@ func TestArrayList(t *testing.T) {
 		l := lists.NewArrayList[int](len(vals))
 		l.Add(vals...)
 		return l
+	})
+}
+
+func TestLinkedList(t *testing.T) {
+	RunListTests(t, "LinkedList", func(vals ...int) lists.List[int] {
+		l := lists.NewLinkedList[int]()
+		l.Add(vals...)
+		return l
+	})
+}
+
+func TestLinkedList_Specifics(t *testing.T) {
+	t.Run("String", func(t *testing.T) {
+		l := lists.NewLinkedList[int]()
+		l.Add(1, 2)
+		if s := l.String(); s != "[1, 2]" {
+			t.Errorf("String() = %q, want \"[1, 2]\"", s)
+		}
+	})
+
+	t.Run("Clone", func(t *testing.T) {
+		l := lists.NewLinkedList[int]()
+		l.Add(1, 2, 3)
+		clone := l.Clone()
+
+		if l.Size() != clone.Size() {
+			t.Errorf("Clone size mismatch: got %d, want %d", clone.Size(), l.Size())
+		}
+		if !slices.Equal(slices.Collect(l.Values()), slices.Collect(clone.Values())) {
+			t.Error("Clone content mismatch")
+		}
+
+		// Verify independence
+		l.Set(0, 99)
+		v, _ := clone.Get(0)
+		if v == 99 {
+			t.Error("Clone should be independent of original")
+		}
 	})
 }
