@@ -136,6 +136,12 @@ func (llc *LinkedListCursor[T]) Remove() (val T, err error) {
 
 // InsertAfter inserts a new element after the current cursor position
 // If the cursor is invalid, it returns an error
+// If want insert elem to blank list, use InsertBefore on tailSentinel cursor
+// Example:
+//
+//	l := lists.NewLinkedList[int]()
+//	c := l.BackCursor() // points to tailSentinel
+//	c.InsertBefore(1)   // inserts 1 into the empty list
 func (llc *LinkedListCursor[T]) InsertAfter(value T) error {
 	if !llc.IsValid() {
 		return ErrInvalidOperation
