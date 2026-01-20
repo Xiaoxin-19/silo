@@ -15,7 +15,7 @@ module.exports = {
         'sliceutil',
         'seqs',
         'lists',
-        'vector',
+        'queues',
         'set',
         'map',
         'tree',
