@@ -27,7 +27,7 @@ func TestBlockingQueue_BasicOperations(t *testing.T) {
 				}
 
 				// TryEnqueue
-				if !bq.TryEnqueue(1) {
+				if ok, _ := bq.TryEnqueue(1); !ok {
 					t.Error("TryEnqueue should succeed on unbounded queue")
 				}
 				bq.EnqueueOrWait(2)
@@ -58,11 +58,11 @@ func TestBlockingQueue_BasicOperations(t *testing.T) {
 			capacity: 2,
 			limit:    2,
 			actions: func(t *testing.T, bq *queues.BlockingQueue[int]) {
-				bq.TryEnqueue(1)
-				bq.TryEnqueue(2)
+				_, _ = bq.TryEnqueue(1)
+				_, _ = bq.TryEnqueue(2)
 
 				// Queue is full
-				if bq.TryEnqueue(3) {
+				if ok, _ := bq.TryEnqueue(3); ok {
 					t.Error("TryEnqueue should fail when bounded queue is full")
 				}
 
@@ -87,8 +87,8 @@ func TestBlockingQueue_BasicOperations(t *testing.T) {
 			capacity: 5,
 			limit:    0,
 			actions: func(t *testing.T, bq *queues.BlockingQueue[int]) {
-				bq.TryEnqueue(1)
-				bq.TryEnqueue(2)
+				_, _ = bq.TryEnqueue(1)
+				_, _ = bq.TryEnqueue(2)
 				bq.Clear()
 				if !bq.IsEmpty() {
 					t.Error("queue should be empty after Clear")
@@ -159,7 +159,7 @@ func TestBlockingQueue_BlockingEnqueue(t *testing.T) {
 	}
 
 	// Make space
-	bq.TryDequeue()
+	_, _ = bq.TryDequeue()
 
 	select {
 	case <-done:
@@ -223,8 +223,8 @@ func TestBlockingQueue_Concurrency(t *testing.T) {
 
 func TestBlockingQueue_ResizeToFit(t *testing.T) {
 	bq := queues.NewBlockingQueue[int](16, 0)
-	bq.TryEnqueue(1)
-	bq.TryEnqueue(2)
+	_, _ = bq.TryEnqueue(1)
+	_, _ = bq.TryEnqueue(2)
 
 	// Just verify it doesn't deadlock or panic
 	bq.ResizeToFit()
