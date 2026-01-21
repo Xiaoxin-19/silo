@@ -20,22 +20,16 @@ func (cq *ConcurrentQueue[T]) Enqueue(value T) {
 	cq.q.Enqueue(value)
 }
 
-func (cq *ConcurrentQueue[T]) EnqueueBatch(values ...T) {
-	cq.mu.Lock()
-	defer cq.mu.Unlock()
-	cq.q.EnqueueAll(values...)
-}
-
 func (cq *ConcurrentQueue[T]) Dequeue() (T, bool) {
 	cq.mu.Lock()
 	defer cq.mu.Unlock()
 	return cq.q.Dequeue()
 }
 
-func (cq *ConcurrentQueue[T]) DequeueBatch(maxElements int) []T {
+func (cq *ConcurrentQueue[T]) DequeueBatchInto(dst []T) int {
 	cq.mu.Lock()
 	defer cq.mu.Unlock()
-	return cq.q.DequeueBatch(maxElements)
+	return cq.q.DequeueBatchInto(dst)
 }
 
 func (cq *ConcurrentQueue[T]) Size() int {

@@ -7,212 +7,228 @@ import (
 	"testing"
 )
 
-// QueueInterface defines the common behavior for benchmarking
-type QueueInterface interface {
-	Produce(val int)
-	Consume() int
-	ProduceBatch(vals []int)
-	ConsumeBatch(maxItems int) []int
+// ==========================================
+// 1. Data Payloads (Variable A: Payload Size)
+// ==========================================
+
+// Tiny: 8 Bytes (int64)
+type PayloadTiny int64
+
+// Medium: 128 Bytes
+type PayloadMedium struct {
+	Data [128]byte
 }
 
-// ChannelWrapper wraps a native channel to match QueueInterface
-type ChannelWrapper struct {
-	ch chan int
+// Large: 1KB (1024 Bytes)
+type PayloadLarge struct {
+	Data [1024]byte
 }
 
-func NewChannelWrapper(cap int) *ChannelWrapper {
-	return &ChannelWrapper{ch: make(chan int, cap)}
+// ==========================================
+// 2. Queue Modes (Variable B: Transport Mode)
+// ==========================================
+
+// BenchmarkInterface defines the interaction
+type BenchDriver[T any] interface {
+	Setup(capacity int)
+	Produce(items []T)
+	Consume(count int)
 }
 
-func (cw *ChannelWrapper) Produce(val int) {
-	cw.ch <- val
+// --- Mode 1: Item Queue (One by One) ---
+// Uses NotifyQueue[T]. Calls EnqueueOrWait for each item.
+type ModeItem[T any] struct {
+	q *queues.NotifyQueue[T]
 }
 
-func (cw *ChannelWrapper) Consume() int {
-	return <-cw.ch
+func (m *ModeItem[T]) Setup(capacity int) {
+	m.q = queues.NewNotifyQueue[T](capacity, capacity)
 }
-
-func (cw *ChannelWrapper) ProduceBatch(vals []int) {
-	for _, v := range vals {
-		cw.ch <- v
+func (m *ModeItem[T]) Produce(items []T) {
+	// Simulate loop of single items (High lock contention)
+	for _, item := range items {
+		m.q.EnqueueOrWait(item)
+	}
+}
+func (m *ModeItem[T]) Consume(count int) {
+	for i := 0; i < count; i++ {
+		m.q.DequeueOrWait()
 	}
 }
 
-func (cw *ChannelWrapper) ConsumeBatch(maxItems int) []int {
-	res := make([]int, 0, maxItems)
-	for i := 0; i < maxItems; i++ {
-		res = append(res, <-cw.ch)
+// --- Mode 2: Batch Copy Queue (Copy Data) ---
+// Uses NotifyQueue[T]. Calls EnqueueBatchOrWait.
+// Data is copied from input slice into internal queue array.
+type ModeBatchCopy[T any] struct {
+	q *queues.NotifyQueue[T]
+}
+
+func (m *ModeBatchCopy[T]) Setup(capacity int) {
+	m.q = queues.NewNotifyQueue[T](capacity, capacity)
+}
+func (m *ModeBatchCopy[T]) Produce(items []T) {
+	// One lock acquisition, but O(N) memory copy
+	m.q.EnqueueBatchOrWait(items...)
+}
+func (m *ModeBatchCopy[T]) Consume(count int) {
+	// We consume in batches to match the production logic for throughput
+	// Assuming consumer also wants batch efficiency
+	// Note: 'count' here is total items.
+	// We need to consume until we get 'count' items.
+	remaining := count
+	buf := make([]T, 128) // Use a fixed buffer for consumption
+	for remaining > 0 {
+		toRead := len(buf)
+		if remaining < toRead {
+			toRead = remaining
+		}
+		n := m.q.DequeueBatchOrWait(buf[:toRead])
+		remaining -= n
 	}
-	return res
 }
 
-// BlockingQueueWrapper wraps our custom BlockingQueue
-type BlockingQueueWrapper struct {
-	bq *queues.BlockingQueue[int]
+// --- Mode 3: Slice Pointer Queue (Zero Copy) ---
+// Uses NotifyQueue[[]T]. The "Item" in the queue is the slice header itself.
+type ModeSlicePointer[T any] struct {
+	q *queues.NotifyQueue[[]T]
 }
 
-func NewBlockingQueueWrapper(cap int) *BlockingQueueWrapper {
-	// Limit equals capacity to mimic channel behavior (blocking when full)
-	return &BlockingQueueWrapper{bq: queues.NewBlockingQueue[int](cap, cap)}
+func (m *ModeSlicePointer[T]) Setup(capacity int) {
+	// Capacity here is "number of slices", not "number of T items"
+	// To be fair, if we treat capacity as "buffer size", this queue can hold 'capacity' batches.
+	m.q = queues.NewNotifyQueue[[]T](capacity, capacity)
+}
+func (m *ModeSlicePointer[T]) Produce(items []T) {
+	// Enqueue the slice header as a single unit (O(1) copy)
+	// IMPORTANT: In real code, 'items' ownership is transferred!
+	m.q.EnqueueOrWait(items)
+}
+func (m *ModeSlicePointer[T]) Consume(count int) {
+	// Here 'count' is total items.
+	// But in this mode, one Dequeue = one batch of items.
+	// We need to know the batch size to know how many dequeues to do?
+	// Or we just consume 'ops' times.
+
+	// For benchmarking, Produce is called with a 'batch'.
+	// So 1 Produce call = 1 Dequeue call here.
+	// But the interface says 'Consume(count int)'.
+	// To make it work, we assume Consume is called with number of *Batches* for this mode,
+	// or we adjust the driver.
+
+	// Let's adjust the driver logic to be simpler:
+	// The benchmark loop N is "Number of Produce calls".
+	m.q.DequeueOrWait()
 }
 
-func (bqw *BlockingQueueWrapper) Produce(val int) {
-	bqw.bq.EnqueueOrWait(val)
+// ==========================================
+// 3. Benchmark Runner
+// ==========================================
+
+func BenchmarkNotifyQueue(b *testing.B) {
+	// Matrix: Payload Types
+	// Tiny: 8, Medium: 128, Large: 1024
+
+	b.Run("Tiny(8B)", func(b *testing.B) { runModes[PayloadTiny](b, 8) })
+	b.Run("Medium(128B)", func(b *testing.B) { runModes[PayloadMedium](b, 128) })
+	b.Run("Large(1KB)", func(b *testing.B) { runModes[PayloadLarge](b, 1024) })
 }
 
-func (bqw *BlockingQueueWrapper) Consume() int {
-	val, _ := bqw.bq.DequeueOrWait()
-	return val
-}
+func runModes[T any](b *testing.B, itemSize int64) {
+	concurrencies := []struct{ P, C int }{{1, 1}, {10, 10}, {100, 100}}
+	batchSizes := []int{10, 100, 1000}
 
-func (bqw *BlockingQueueWrapper) ProduceBatch(vals []int) {
-	bqw.bq.EnqueueBatchOrWait(vals)
-}
+	for _, c := range concurrencies {
+		for _, batch := range batchSizes {
+			// Calculate total bytes per Op (one batch)
+			bytesPerOp := itemSize * int64(batch)
 
-func (bqw *BlockingQueueWrapper) ConsumeBatch(maxItems int) []int {
-	return bqw.bq.DequeueBatchOrWait(maxItems)
-}
+			group := fmt.Sprintf("%dP%dC/BatchSize-%d", c.P, c.C, batch)
 
-func BenchmarkQueue(b *testing.B) {
-	// Define different concurrency levels (Producers x Consumers)
-	concurrencyLevels := []struct {
-		producers int
-		consumers int
-	}{
-		{1, 1},
-		{4, 4},
-		{10, 10},
-		{100, 100},
-	}
+			b.Run(group, func(b *testing.B) {
+				// 1. Item Mode (Loop)
+				// Only test for small batches to avoid timeout
+				if batch <= 100 {
+					b.Run("Mode=Item", func(b *testing.B) {
+						b.SetBytes(bytesPerOp)
+						driver := &ModeItem[T]{}
+						runBench[T](b, driver, c.P, c.C, batch, false)
+					})
+				}
 
-	// Define batch sizes to test (1 means single item)
-	batchSizes := []int{1, 10, 100}
-
-	const bufferSize = 1024
-
-	for _, c := range concurrencyLevels {
-		for _, batchSize := range batchSizes {
-			groupName := fmt.Sprintf("%dP%dC/Batch-%d", c.producers, c.consumers, batchSize)
-
-			b.Run(groupName, func(b *testing.B) {
-				// 1. Benchmark Native Channel
-				b.Run("Channel", func(b *testing.B) {
-					q := NewChannelWrapper(bufferSize)
-					if batchSize == 1 {
-						runBenchmark(b, q, c.producers, c.consumers)
-					} else {
-						runBatchBenchmark(b, q, c.producers, c.consumers, batchSize)
-					}
+				// 2. Batch Copy Mode
+				b.Run("Mode=BatchCopy", func(b *testing.B) {
+					b.SetBytes(bytesPerOp)
+					driver := &ModeBatchCopy[T]{}
+					runBench[T](b, driver, c.P, c.C, batch, false)
 				})
 
-				// 2. Benchmark BlockingQueue
-				b.Run("BlockingQueue", func(b *testing.B) {
-					q := NewBlockingQueueWrapper(bufferSize)
-					if batchSize == 1 {
-						runBenchmark(b, q, c.producers, c.consumers)
-					} else {
-						runBatchBenchmark(b, q, c.producers, c.consumers, batchSize)
-					}
+				// 3. Slice Pointer Mode
+				b.Run("Mode=SlicePtr", func(b *testing.B) {
+					b.SetBytes(bytesPerOp)
+					driver := &ModeSlicePointer[T]{}
+					runBench[T](b, driver, c.P, c.C, batch, true)
 				})
 			})
 		}
 	}
 }
 
-// runBenchmark is the driver for single item operations
-func runBenchmark(b *testing.B, q QueueInterface, producers, consumers int) {
-	var wg sync.WaitGroup
-	wg.Add(producers + consumers)
+func runBench[T any](b *testing.B, driver BenchDriver[T], P, C int, batchSize int, isSliceMode bool) {
+	// Setup Queue with enough buffer to avoid blocking bias.
+	// We want to measure the "Queue Operation Cost", not the "Wait for Consumer Cost".
+	// Base capacity in terms of "Batches"
+	const baseBatchCapacity = 1024
 
-	// totalItems is roughly b.N
-	opsPerProd := b.N / producers
+	if isSliceMode {
+		driver.Setup(baseBatchCapacity)
+	} else {
+		// For Item queues, capacity must be items * batchSize
+		driver.Setup(baseBatchCapacity * batchSize)
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(P + C)
+
+	// b.N is total number of Batches
+	opsPerProd := b.N / P
 	if opsPerProd == 0 {
 		opsPerProd = 1
 	}
-	
-	// Recalculate exact total items to match production and consumption
-	totalItems := opsPerProd * producers
-	itemsPerConsumer := totalItems / consumers
 
-	// Start Consumers
-	for i := 0; i < consumers; i++ {
-		count := itemsPerConsumer
-		// Handle remainder for last consumer if any (though in this bench P==C mostly)
-		if i == consumers-1 {
-			count = totalItems - itemsPerConsumer*(consumers-1)
-		}
-		
-		go func(c int) {
-			defer wg.Done()
-			for j := 0; j < c; j++ {
-				q.Consume()
-			}
-		}(count)
-	}
+	totalBatches := opsPerProd * P
+	batchesPerCons := totalBatches / C
+	remainder := totalBatches % C
 
-	// Start Producers
+	payload := make([]T, batchSize)
+
 	b.ResetTimer()
-	for i := 0; i < producers; i++ {
-		go func(c int) {
-			defer wg.Done()
-			for j := 0; j < c; j++ {
-				q.Produce(j)
-			}
-		}(opsPerProd)
-	}
 
-	wg.Wait()
-	b.StopTimer()
-}
-
-// runBatchBenchmark is the driver for batch operations
-func runBatchBenchmark(b *testing.B, q QueueInterface, producers, consumers, batchSize int) {
-	var wg sync.WaitGroup
-	wg.Add(producers + consumers)
-
-	// b.N represents number of "batches" or "ops" ? 
-	// Usually b.N is "number of operations". 
-	// If we want to compare throughput of ITEMS, we should be careful.
-	// But usually benchmark compares "time per op".
-	// Here an "op" is a "batch produce" or "batch consume".
-	
-	opsPerProd := b.N / producers
-	if opsPerProd == 0 {
-		opsPerProd = 1
-	}
-	
-	// totalBatches
-	totalBatches := opsPerProd * producers
-	batchesPerConsumer := totalBatches / consumers
-
-	// Pre-allocate a batch to send
-	sendBatch := make([]int, batchSize)
-	for k := 0; k < batchSize; k++ {
-		sendBatch[k] = k
-	}
-
-	// Start Consumers
-	for i := 0; i < consumers; i++ {
-		count := batchesPerConsumer
-		if i == consumers-1 {
-			count = totalBatches - batchesPerConsumer*(consumers-1)
+	// Consumers
+	for i := 0; i < C; i++ {
+		n := batchesPerCons
+		if i < remainder {
+			n++
 		}
 
-		go func(c int) {
+		go func(batchCount int) {
 			defer wg.Done()
-			for j := 0; j < c; j++ {
-				q.ConsumeBatch(batchSize)
+			if isSliceMode {
+				for j := 0; j < batchCount; j++ {
+					driver.Consume(1)
+				}
+			} else {
+				// For Item/BatchCopy mode, consume exact item count
+				driver.Consume(batchCount * batchSize)
 			}
-		}(count)
+		}(n)
 	}
 
-	// Start Producers
-	b.ResetTimer()
-	for i := 0; i < producers; i++ {
-		go func(c int) {
+	// Producers
+	for i := 0; i < P; i++ {
+		go func(count int) {
 			defer wg.Done()
-			for j := 0; j < c; j++ {
-				q.ProduceBatch(sendBatch)
+			for j := 0; j < count; j++ {
+				driver.Produce(payload)
 			}
 		}(opsPerProd)
 	}

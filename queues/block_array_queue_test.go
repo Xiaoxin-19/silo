@@ -233,3 +233,22 @@ func TestBlockingQueue_ResizeToFit(t *testing.T) {
 		t.Errorf("expected size 2, got %d", bq.Size())
 	}
 }
+
+func TestBlockingQueue_TryDequeueBatchInto(t *testing.T) {
+	bq := queues.NewBlockingQueue[int](10, 0)
+	bq.EnqueueOrWait(1)
+	bq.EnqueueOrWait(2)
+	bq.EnqueueOrWait(3)
+
+	buf := make([]int, 2)
+	n := bq.TryDequeueBatchInto(buf)
+	if n != 2 {
+		t.Errorf("expected 2 items, got %d", n)
+	}
+	if buf[0] != 1 || buf[1] != 2 {
+		t.Errorf("unexpected values: %v", buf)
+	}
+	if bq.Size() != 1 {
+		t.Errorf("expected size 1, got %d", bq.Size())
+	}
+}

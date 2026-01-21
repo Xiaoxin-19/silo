@@ -7,8 +7,8 @@ import (
 
 func TestNewArrayQueue(t *testing.T) {
 	tests := []struct {
-		name             string
-		initialCapacity  int
+		name            string
+		initialCapacity int
 	}{
 		{"Negative capacity", -1},
 		{"Zero capacity", 0},
@@ -45,7 +45,7 @@ func TestArrayQueue_Enqueue_Dequeue(t *testing.T) {
 	if q.Size() != 4 {
 		t.Errorf("expected size 4, got %d", q.Size())
 	}
-	
+
 	// Dequeue 2 items: [_, _, 3, 4] (head at index 2)
 	if v, ok := q.Dequeue(); !ok || v != 1 {
 		t.Errorf("expected 1, got %v", v)
@@ -61,7 +61,7 @@ func TestArrayQueue_Enqueue_Dequeue(t *testing.T) {
 	if q.Size() != 4 {
 		t.Errorf("expected size 4, got %d", q.Size())
 	}
-	
+
 	// Verify order with Peek and Dequeue
 	if v, ok := q.Peek(); !ok || v != 3 {
 		t.Errorf("Peek expected 3, got %v", v)
@@ -106,7 +106,7 @@ func TestArrayQueue_EnqueueAll(t *testing.T) {
 
 	// Drain
 	q.Clear()
-	
+
 	// Test wrap-around copy in EnqueueAll
 	// Setup: cap 4, [_, _, 1, 2] (head=2)
 	q = queues.NewArrayQueue[int](4)
@@ -114,20 +114,20 @@ func TestArrayQueue_EnqueueAll(t *testing.T) {
 	q.Enqueue(2)
 	q.Dequeue() // remove 1
 	q.Dequeue() // remove 2
-	q.Clear() 
-	
+	q.Clear()
+
 	// Manually construct wrap scenario
 	q.Enqueue(100)
 	q.Enqueue(200)
 	q.Dequeue() // head moves to index 1
-	
-	// Add 3 items: 300, 400, 500. 
+
+	// Add 3 items: 300, 400, 500.
 	q.EnqueueAll(300, 400, 500)
-	
+
 	if q.Size() != 4 {
 		t.Errorf("expected size 4, got %d", q.Size())
 	}
-	
+
 	expected := []int{200, 300, 400, 500}
 	for _, exp := range expected {
 		if v, ok := q.Dequeue(); !ok || v != exp {
@@ -161,7 +161,7 @@ func TestArrayQueue_Clear(t *testing.T) {
 	if !q.IsEmpty() {
 		t.Error("expected IsEmpty true after clear")
 	}
-	
+
 	// Cannot check internal buffer zeroing directly
 }
 
@@ -196,20 +196,60 @@ func TestArrayQueue_WrapAroundResize(t *testing.T) {
 	q.Dequeue() // remove 1
 	q.Dequeue() // remove 2
 	// [_, _, 3, 4] head=2
-	q.Enqueue(5) 
+	q.Enqueue(5)
 	q.Enqueue(6)
 	// [5, 6, 3, 4] head=2 (wrapped)
-	
-	q.Enqueue(7) 
+
+	q.Enqueue(7)
 	// Trigger resize to 8. Should unwrap.
-	
+
 	// Cannot check capacity directly
-	
+
 	expected := []int{3, 4, 5, 6, 7}
 	for i, exp := range expected {
 		val, ok := q.Dequeue()
 		if !ok || val != exp {
 			t.Errorf("step %d: expected %d, got %v", i, exp, val)
+		}
+	}
+}
+
+func TestArrayQueue_DequeueBatchInto(t *testing.T) {
+	q := queues.NewArrayQueue[int](8)
+	// Fill: [0, 1, 2, 3, 4, 5, 6, 7]
+	for i := 0; i < 8; i++ {
+		q.Enqueue(i)
+	}
+
+	// 1. Dequeue first 4 items
+	buf := make([]int, 4)
+	n := q.DequeueBatchInto(buf)
+	if n != 4 {
+		t.Errorf("expected 4 items, got %d", n)
+	}
+	for i := 0; i < 4; i++ {
+		if buf[i] != i {
+			t.Errorf("expected %d, got %d", i, buf[i])
+		}
+	}
+
+	// 2. Enqueue to trigger wrap-around
+	// Current: head=4, size=4. [_, _, _, _, 4, 5, 6, 7]
+	// Add 2 items: 8, 9. -> [8, 9, _, _, 4, 5, 6, 7] (wrapped)
+	q.Enqueue(8)
+	q.Enqueue(9)
+
+	// 3. DequeueBatchInto covering wrap-around
+	// Expect: 4, 5, 6, 7, 8, 9
+	buf2 := make([]int, 10)
+	n = q.DequeueBatchInto(buf2)
+	if n != 6 {
+		t.Errorf("expected 6 items, got %d", n)
+	}
+	expected := []int{4, 5, 6, 7, 8, 9}
+	for i, v := range expected {
+		if buf2[i] != v {
+			t.Errorf("idx %d: expected %d, got %d", i, v, buf2[i])
 		}
 	}
 }

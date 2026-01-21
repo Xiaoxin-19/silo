@@ -72,7 +72,9 @@ func (nq *NotifyQueue[T]) EnqueueBatchOrWait(values ...T) error {
 func (nq *NotifyQueue[T]) TryDequeue() (T, bool) {
 	val, ok := nq.bq.TryDequeue()
 	// If the queue is not empty, ensure signal is present
-	nq.ensureNotifyCh()
+	if ok {
+		nq.ensureNotifyCh()
+	}
 	return val, ok
 }
 
@@ -85,22 +87,24 @@ func (nq *NotifyQueue[T]) DequeueOrWait() (T, bool) {
 	return val, ok
 }
 
-// DequeueBatch removes and returns up to maxElements elements from the queue.
-// If the queue is empty, it returns an empty slice.
-func (nq *NotifyQueue[T]) TryDequeueBatch(maxElements int) []T {
-	vals := nq.bq.TryDequeueBatch(maxElements)
+// TryDequeueBatchInto removes up to len(dst) elements from the queue and copies them into dst.
+// It returns the number of elements copied.
+func (nq *NotifyQueue[T]) TryDequeueBatchInto(dst []T) int {
+	count := nq.bq.TryDequeueBatchInto(dst)
 	// If the queue is not empty, ensure signal is present
-	nq.ensureNotifyCh()
-	return vals
+	if count > 0 {
+		nq.ensureNotifyCh()
+	}
+	return count
 }
 
-// DequeueBatch removes and returns up to maxElements elements from the queue with blocking wait.
-// If the queue is empty, it blocks until data is available.
-func (nq *NotifyQueue[T]) DequeueBatchOrWait(maxElements int) []T {
-	vals := nq.bq.DequeueBatchOrWait(maxElements)
+// DequeueBatchOrWait removes up to len(dst) elements from the queue into dst with blocking wait.
+// It returns the number of elements copied.
+func (nq *NotifyQueue[T]) DequeueBatchOrWait(dst []T) int {
+	count := nq.bq.DequeueBatchOrWait(dst)
 	// If the queue is not empty, ensure signal is present
 	nq.ensureNotifyCh()
-	return vals
+	return count
 }
 
 // Size returns the current number of elements in the queue.

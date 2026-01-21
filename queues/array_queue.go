@@ -100,6 +100,8 @@ func (aq *ArrayQueue[T]) EnqueueAll(values ...T) {
 	aq.size += n
 }
 
+// Dequeue removes and returns the front element from the queue.
+// If the queue is empty, it returns (zero value, false).
 func (aq *ArrayQueue[T]) Dequeue() (value T, ok bool) {
 	if aq.size == 0 {
 		return value, false
@@ -112,30 +114,31 @@ func (aq *ArrayQueue[T]) Dequeue() (value T, ok bool) {
 	return value, true
 }
 
-func (aq *ArrayQueue[T]) DequeueBatch(maxElements int) (values []T) {
-	if aq.size == 0 {
-		return values
+// DequeueBatchInto removes up to len(dst) elements from the queue and copies them into dst.
+// It returns the number of elements copied.
+func (aq *ArrayQueue[T]) DequeueBatchInto(dst []T) int {
+	if aq.size == 0 || len(dst) == 0 {
+		return 0
 	}
-	if maxElements > aq.size {
-		maxElements = aq.size
+	count := len(dst)
+	if count > aq.size {
+		count = aq.size
 	}
-	values = make([]T, maxElements)
-	if aq.head+maxElements <= len(aq.buf) {
-		copy(values, aq.buf[aq.head:aq.head+maxElements])
-		// clear references
-		clear(aq.buf[aq.head : aq.head+maxElements])
+
+	if aq.head+count <= len(aq.buf) {
+		copy(dst, aq.buf[aq.head:aq.head+count])
+		clear(aq.buf[aq.head : aq.head+count])
 	} else {
 		// wrapped around
 		part1Len := len(aq.buf) - aq.head
-		copy(values, aq.buf[aq.head:])
-		copy(values[part1Len:], aq.buf[:maxElements-part1Len])
-		// clear references
+		copy(dst, aq.buf[aq.head:])
+		copy(dst[part1Len:], aq.buf[:count-part1Len])
 		clear(aq.buf[aq.head:])
-		clear(aq.buf[:maxElements-part1Len])
+		clear(aq.buf[:count-part1Len])
 	}
-	aq.head = (aq.head + maxElements) & aq.mask
-	aq.size -= maxElements
-	return values
+	aq.head = (aq.head + count) & aq.mask
+	aq.size -= count
+	return count
 }
 
 func (aq *ArrayQueue[T]) Peek() (value T, ok bool) {

@@ -124,33 +124,33 @@ func (bq *BlockingQueue[T]) DequeueOrWait() (T, bool) {
 	return val, ok
 }
 
-func (bq *BlockingQueue[T]) DequeueBatchOrWait(maxItems int) []T {
+func (bq *BlockingQueue[T]) DequeueBatchOrWait(dst []T) int {
 	bq.mu.Lock()
 	defer bq.mu.Unlock()
 	for bq.q.size == 0 {
 		bq.notEmpty.Wait()
 		if bq.closed {
-			return nil
+			return 0
 		}
 	}
-	values := bq.q.DequeueBatch(maxItems)
+	count := bq.q.DequeueBatchInto(dst)
 	if bq.limit > 0 {
 		bq.notFull.Signal()
 	}
-	return values
+	return count
 }
 
-func (bq *BlockingQueue[T]) TryDequeueBatch(maxItems int) []T {
+func (bq *BlockingQueue[T]) TryDequeueBatchInto(dst []T) int {
 	bq.mu.Lock()
 	defer bq.mu.Unlock()
 	if bq.q.size == 0 {
-		return nil
+		return 0
 	}
-	values := bq.q.DequeueBatch(maxItems)
+	count := bq.q.DequeueBatchInto(dst)
 	if bq.limit > 0 {
 		bq.notFull.Signal()
 	}
-	return values
+	return count
 }
 
 func (bq *BlockingQueue[T]) Peek() (T, bool) {

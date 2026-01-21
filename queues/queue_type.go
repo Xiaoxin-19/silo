@@ -7,8 +7,8 @@ type Queue[T any] interface {
 	EnqueueAll(values ...T)
 	// removes and returns the element at the front of the queue
 	Dequeue() (value T, ok bool)
-	// batch removes and returns up to maxElements from the front of the queue
-	DequeueBatch(maxElements int) (values []T)
+	// batch removes and returns up to len(dst) elements from the front of the queue into dst
+	DequeueBatchInto(dst []T) int
 	// returns the element at the front of the queue without removing it
 	Peek() (value T, ok bool)
 	// returns the number of elements in the queue

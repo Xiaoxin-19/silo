@@ -116,8 +116,9 @@ func TestNotifyQueue_Concurrent(t *testing.T) {
 		for {
 			select {
 			case <-q.Ready():
-				batch := q.TryDequeueBatch(10)
-				receivedCount += len(batch)
+				batch := make([]int, 10)
+				n := q.TryDequeueBatchInto(batch)
+				receivedCount += n
 				if receivedCount == itemCount {
 					return
 				}
