@@ -134,6 +134,14 @@ func WithShutdownTimeout[T any](timeout time.Duration) BatcherOption[T] {
 	}
 }
 
+// NewBatcher creates a new Batcher with the provided queue, handler, and options.
+// It panics if the handler is nil.
+//
+// The Batcher will start processing when Run is called. The default configuration is:
+//   - BatchSize:       100
+//   - Interval:        1s
+//   - Concurrency:     1
+//   - ShutdownTimeout: 5s
 func NewBatcher[T any](queue BatcherQueue[T], handler BatchHandler[T], opts ...BatcherOption[T]) *Batcher[T] {
 	if handler == nil {
 		panic("silo.NewBatcher: handler cannot be nil")
