@@ -1,6 +1,8 @@
 package seqs_test
 
 import (
+	"context"
+	"runtime"
 	"silo/seqs"
 	"silo/sliceutil"
 	"slices"
@@ -89,6 +91,68 @@ func BenchmarkUnified_Map(b *testing.B) {
 
 				}
 			})
+		})
+	}
+}
+
+// BenchmarkUnified_Foreach compares Foreach operations across different implementations and workloads.
+func BenchmarkUnified_Foreach(b *testing.B) {
+	sizes := []struct {
+		name string
+		len  int
+	}{
+		{"Small", 1_000},
+		{"Medium", 100_000},
+		{"Large", 1_000_000},
+	}
+
+	workloads := []struct {
+		name string
+		work func(int)
+	}{
+		{
+			name: "Light",
+			work: func(x int) { _ = x * 2 },
+		},
+		{
+			name: "Heavy",
+			work: func(x int) { heavyCalc(x) },
+		},
+	}
+
+	for _, sz := range sizes {
+		b.Run(sz.name, func(b *testing.B) {
+			input := make([]int, sz.len)
+			for i := 0; i < sz.len; i++ {
+				input[i] = i
+			}
+
+			for _, wl := range workloads {
+				b.Run(wl.name, func(b *testing.B) {
+					b.Run("Serial", func(b *testing.B) {
+						for b.Loop() {
+							for _, v := range input {
+								wl.work(v)
+							}
+						}
+					})
+
+					b.Run("Seq_ParallelForeach", func(b *testing.B) {
+						handler := func(ctx context.Context, batch []int) error {
+							for _, v := range batch {
+								wl.work(v)
+							}
+							return nil
+						}
+						for b.Loop() {
+							seqs.ParallelForeach(context.Background(), slices.Values(input), handler,
+								seqs.WithBatcherSize[int](1024),
+								seqs.WithConcurrency[int](runtime.GOMAXPROCS(0)),
+							)
+						}
+					})
+				})
+			}
 		})
 	}
 }

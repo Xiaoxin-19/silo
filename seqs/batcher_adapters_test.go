@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -166,5 +167,41 @@ func TestFetcherQueue_Error(t *testing.T) {
 		// Success: Queue closed
 	case <-time.After(1 * time.Second):
 		t.Fatal("FetcherQueue did not close on fetcher error")
+	}
+}
+
+// TestSeqQueue_Integration verifies that SeqQueue works correctly with Batcher.
+func TestSeqQueue_Integration(t *testing.T) {
+	// 1. Setup Seq
+	input := []int{0, 1, 2, 3, 4}
+	seq := slices.Values(input)
+
+	// 2. Create Adapter
+	q := seqs.NewSeqQueue(seq, 2)
+
+	// 3. Setup Batcher
+	var processedCount atomic.Int32
+	handler := func(ctx context.Context, batch []int) error {
+		processedCount.Add(int32(len(batch)))
+		return nil
+	}
+
+	b := seqs.NewBatcher[int](q, handler, seqs.WithBatcherSize[int](2))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		b.Run(ctx)
+	}()
+
+	// 4. Wait for batcher to finish (triggered by seq exhaustion -> queue close)
+	wg.Wait()
+	cancel()
+
+	// 5. Verify results
+	if processedCount.Load() != 5 {
+		t.Errorf("Expected 5 items, got %d", processedCount.Load())
 	}
 }

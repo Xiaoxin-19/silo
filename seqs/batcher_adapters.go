@@ -2,6 +2,7 @@ package seqs
 
 import (
 	"context"
+	"iter"
 	"silo/queues"
 )
 
@@ -37,6 +38,62 @@ func (q *ChannelQueue[T]) ingest() {
 		if err := q.EnqueueOrWait(item); err != nil {
 			return // Queue closed
 		}
+	}
+}
+
+// -------------------------------------------------------
+// Seq Adapter
+// -------------------------------------------------------
+
+// SeqQueue adapts a standard Go iterator (iter.Seq) to the BatcherQueue interface.
+type SeqQueue[T any] struct {
+	*queues.NotifyQueue[T]
+	seq       iter.Seq[T]
+	batchSize int
+}
+
+// NewSeqQueue creates a BatcherQueue from an iterator sequence.
+// The queue closes automatically when the sequence is exhausted.
+// capacity sets the maximum number of items to buffer before blocking (backpressure).
+func NewSeqQueue[T any](seq iter.Seq[T], capacity int) *SeqQueue[T] {
+	if capacity <= 0 {
+		capacity = 128
+	}
+
+	// Ensure local pre-batch size doesn't exceed capacity to prevent deadlocks
+	// if the underlying queue blocks on large batches.
+	// We cap it at 128 for general performance.
+	bs := 128
+	if capacity < bs {
+		bs = capacity
+	}
+
+	q := &SeqQueue[T]{
+		NotifyQueue: queues.NewNotifyQueue[T](capacity, capacity),
+		seq:         seq,
+		batchSize:   bs,
+	}
+	go q.ingest()
+	return q
+}
+
+func (q *SeqQueue[T]) ingest() {
+	defer q.Close()
+	buffer := make([]T, 0, q.batchSize)
+
+	for item := range q.seq {
+		buffer = append(buffer, item)
+		if len(buffer) >= q.batchSize {
+			if err := q.EnqueueBatchOrWait(buffer...); err != nil {
+				return
+			}
+			// Allocate new buffer to prevent data race if the queue retains the slice
+			buffer = make([]T, 0, q.batchSize)
+		}
+	}
+	// Flush remaining
+	if len(buffer) > 0 {
+		q.EnqueueBatchOrWait(buffer...)
 	}
 }
 

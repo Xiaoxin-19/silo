@@ -32,7 +32,7 @@ type PayloadMedium struct {
 // Handler is No-Op.
 func BenchmarkBatcher_Overhead_Matrix(b *testing.B) {
 	batchSizes := []int{10, 100, 1000}
-	workers := []int{1, 4}
+	workers := []int{1, 4, 8, 16, 32}
 
 	// 1. Tiny Payload (8 bytes) - CPU/Scheduling Bound
 	b.Run("Payload=Tiny", func(b *testing.B) {
@@ -194,43 +194,67 @@ func runOverheadComparison[T any](b *testing.B, batchSize int, workers int, fact
 }
 
 // --- Benchmark 2: CPU Scaling ---
-// Tests how well the Batcher scales with CPU-intensive workloads.
-func BenchmarkBatcher_CPU_Scaling(b *testing.B) {
+// Tests how well the Batcher scales with different computational workloads.
+func BenchmarkBatcher_Workload_Scaling(b *testing.B) {
 	const batchSize = 100
+	workersList := []int{1, 4, 8, 16}
 
-	runCPUScaling := func(b *testing.B, workers int) {
-		q := queues.NewNotifyQueue[int](1024, 1024)
-		handler := func(ctx context.Context, batch []int) error {
-			for _, v := range batch {
-				heavyCalc(v)
-			}
-			return nil
-		}
-
-		batcher := seqs.NewBatcher(q, handler,
-			seqs.WithBatcherSize[int](batchSize),
-			seqs.WithConcurrency[int](workers),
-		)
-
-		ctx, cancel := context.WithCancel(context.Background())
-		var wg sync.WaitGroup
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			batcher.Run(ctx)
-		}()
-
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
-			q.EnqueueOrWait(i)
-		}
-		q.Close()
-		wg.Wait()
-		cancel()
+	workloads := []struct {
+		name string
+		work func(int)
+	}{
+		{
+			name: "Light", // Simple arithmetic
+			work: func(v int) { _ = v * 2 },
+		},
+		{
+			name: "Medium", // Moderate loop (100 iterations)
+			work: func(v int) {
+				for i := 0; i < 100; i++ {
+					v = (v + i*i) % 10000
+				}
+			},
+		},
+		{
+			name: "Heavy", // Heavy loop (1000 iterations)
+			work: func(v int) { heavyCalc(v) },
+		},
 	}
 
-	b.Run("Heavy_Calc", func(b *testing.B) {
-		b.Run("Workers=1", func(b *testing.B) { runCPUScaling(b, 1) })
-		b.Run("Workers=4", func(b *testing.B) { runCPUScaling(b, 4) })
-	})
+	for _, wl := range workloads {
+		b.Run(wl.name, func(b *testing.B) {
+			for _, workers := range workersList {
+				b.Run(fmt.Sprintf("Workers=%d", workers), func(b *testing.B) {
+					q := queues.NewNotifyQueue[int](1024, 1024)
+					handler := func(ctx context.Context, batch []int) error {
+						for _, v := range batch {
+							wl.work(v)
+						}
+						return nil
+					}
+
+					batcher := seqs.NewBatcher(q, handler,
+						seqs.WithBatcherSize[int](batchSize),
+						seqs.WithConcurrency[int](workers),
+					)
+
+					ctx, cancel := context.WithCancel(context.Background())
+					var wg sync.WaitGroup
+					wg.Add(1)
+					go func() {
+						defer wg.Done()
+						batcher.Run(ctx)
+					}()
+
+					b.ResetTimer()
+					for i := 0; i < b.N; i++ {
+						q.EnqueueOrWait(i)
+					}
+					q.Close()
+					wg.Wait()
+					cancel()
+				})
+			}
+		})
+	}
 }
