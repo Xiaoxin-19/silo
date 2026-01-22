@@ -283,7 +283,13 @@ func (b *Batcher[T]) dispatcherLoop(ctx context.Context) {
 			// Fix: Use a separate timeout context for shutdown flush to avoid immediate failure due to cancelled ctx
 			shutdownCtx, cancel := context.WithTimeout(context.Background(), b.shutdownTimeout)
 			defer cancel()
-			flush(shutdownCtx, "shutdown")
+			
+			// Shutdown strategy: Try to send to workers, fallback to sync execution if fails
+			if len(buffer) > 0 {
+				if !b.sendJobs(shutdownCtx, buffer, "shutdown") {
+					b.executeSafe(context.Background(), buffer)
+				}
+			}
 			return
 
 		case <-b.queue.Done():
