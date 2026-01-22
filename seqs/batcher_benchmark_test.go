@@ -10,6 +10,9 @@ import (
 	"silo/seqs"
 )
 
+// 1. 添加全局变量，防止编译器优化
+var resultSink int
+
 // heavyCalc simulates a CPU intensive operation.
 // Copied from benchmark_test.go to ensure independence if packages differ.
 func heavyCalc(x int) int {
@@ -217,7 +220,14 @@ func BenchmarkBatcher_Workload_Scaling(b *testing.B) {
 		},
 		{
 			name: "Heavy", // Heavy loop (1000 iterations)
-			work: func(v int) { heavyCalc(v) },
+			work: func(v int) {
+				// Batcher 适合处理 >100µs 的任务，2.6µs 对它来说还是太轻了，全是调度开销。
+				// 我们循环 50 次，把单次任务撑到 ~130µs
+				for i := 0; i < 50; i++ {
+					// 将结果赋值给全局变量，防止编译器优化 (Dead Code Elimination)
+					resultSink = heavyCalc(v)
+				}
+			},
 		},
 	}
 

@@ -9,6 +9,9 @@ import (
 	"testing"
 )
 
+// Global sink to prevent compiler optimization (Dead Code Elimination)
+var foreachSink int
+
 // heavyCalc simulates a CPU intensive operation
 func heavyCalc(x int) int {
 	for i := 0; i < 1000; i++ {
@@ -36,9 +39,19 @@ func BenchmarkUnified_Map(b *testing.B) {
 			transformErr: func(x int) (int, error) { return x * 2, nil },
 		},
 		{
-			name:         "Heavy",
-			transform:    heavyCalc,
-			transformErr: func(x int) (int, error) { return heavyCalc(x), nil },
+			name: "Heavy",
+			transform: func(x int) int {
+				for i := 0; i < 50; i++ {
+					foreachSink = heavyCalc(x)
+				}
+				return foreachSink
+			},
+			transformErr: func(x int) (int, error) {
+				for i := 0; i < 50; i++ {
+					foreachSink = heavyCalc(x)
+				}
+				return foreachSink, nil
+			},
 		},
 	}
 
@@ -116,7 +129,11 @@ func BenchmarkUnified_Foreach(b *testing.B) {
 		},
 		{
 			name: "Heavy",
-			work: func(x int) { heavyCalc(x) },
+			work: func(x int) {
+				for i := 0; i < 50; i++ {
+					foreachSink = heavyCalc(x)
+				}
+			},
 		},
 	}
 
@@ -176,9 +193,19 @@ func BenchmarkUnified_Filter(b *testing.B) {
 			predicateErr: func(x int) (bool, error) { return x%2 == 0, nil },
 		},
 		{
-			name:         "Heavy",
-			predicate:    func(x int) bool { return heavyCalc(x)%2 == 0 },
-			predicateErr: func(x int) (bool, error) { return heavyCalc(x)%2 == 0, nil },
+			name: "Heavy",
+			predicate: func(x int) bool {
+				for i := 0; i < 50; i++ {
+					foreachSink = heavyCalc(x)
+				}
+				return foreachSink%2 == 0
+			},
+			predicateErr: func(x int) (bool, error) {
+				for i := 0; i < 50; i++ {
+					foreachSink = heavyCalc(x)
+				}
+				return foreachSink%2 == 0, nil
+			},
 		},
 	}
 
