@@ -61,15 +61,29 @@ func BenchmarkUnified_Map(b *testing.B) {
 				}
 			})
 
-			b.Run("Seq_Parallel_Batch", func(b *testing.B) {
+			b.Run("Seq_Parallel_Ordered", func(b *testing.B) {
 				for b.Loop() {
 					if wl.name == "Heavy" {
-						for range seqs.ParallelTryMap(slices.Values(input), wl.transformErr, seqs.WithContext(b.Context())) {
+						for range seqs.ParallelTryMap(slices.Values(input), wl.transformErr, seqs.WithContext(b.Context()), seqs.WithOrderStable(true)) {
 						}
 					}
 
 					if wl.name == "Light" {
-						for range seqs.ParallelTryMap(slices.Values(input), wl.transformErr, seqs.WithBatchSize(2048), seqs.WithContext(b.Context())) {
+						for range seqs.ParallelTryMap(slices.Values(input), wl.transformErr, seqs.WithBatchSize(2048), seqs.WithContext(b.Context()), seqs.WithOrderStable(true)) {
+						}
+					}
+				}
+			})
+
+			b.Run("Seq_Parallel_Unordered", func(b *testing.B) {
+				for b.Loop() {
+					if wl.name == "Heavy" {
+						for range seqs.ParallelTryMap(slices.Values(input), wl.transformErr, seqs.WithContext(b.Context()), seqs.WithOrderStable(false)) {
+						}
+					}
+
+					if wl.name == "Light" {
+						for range seqs.ParallelTryMap(slices.Values(input), wl.transformErr, seqs.WithBatchSize(2048), seqs.WithContext(b.Context()), seqs.WithOrderStable(false)) {
 						}
 					}
 
@@ -143,13 +157,14 @@ func BenchmarkUnified_Filter(b *testing.B) {
 					if wl.name == "Heavy" {
 						for range seqs.ParallelTryFilter(slices.Values(input), wl.predicateErr, seqs.WithContext(b.Context())) {
 						}
-						if wl.name == "Light" {
-							count := 0
-							for v, err := range seqs.ParallelTryFilter(slices.Values(input), wl.predicateErr, seqs.WithContext(b.Context()), seqs.WithBatchSize(1024)) {
-								count += v
-								if err != nil {
-									b.Fatal(err)
-								}
+					}
+
+					if wl.name == "Light" {
+						count := 0
+						for v, err := range seqs.ParallelTryFilter(slices.Values(input), wl.predicateErr, seqs.WithContext(b.Context()), seqs.WithBatchSize(1024)) {
+							count += v
+							if err != nil {
+								b.Fatal(err)
 							}
 						}
 					}

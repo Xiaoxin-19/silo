@@ -8,12 +8,16 @@ import (
 	"sync/atomic"
 )
 
-const defaultBatchSize = 128
+const (
+	defaultBatchSize   = 128
+	defaultOrderStable = false // default to unordered for performance
+)
 
 type parallelConfig struct {
-	ctx       context.Context
-	batchSize int
-	workers   int
+	ctx         context.Context
+	batchSize   int
+	workers     int
+	orderStable bool
 }
 
 type ParallelOption func(*parallelConfig)
@@ -39,6 +43,12 @@ func WithWorkers(count int) func(*parallelConfig) {
 			count = 1
 		}
 		o.workers = count
+	}
+}
+
+func WithOrderStable(stable bool) func(*parallelConfig) {
+	return func(o *parallelConfig) {
+		o.orderStable = stable
 	}
 }
 
@@ -204,6 +214,14 @@ func (e *parallelMapExecutor[T, R]) collect(yield func(R, error) bool) {
 	}
 }
 
+func (e *parallelMapExecutor[T, R]) collectUnordered(yield func(R, error) bool) {
+	for res := range e.results {
+		if !e.yieldChunk(res.chunk, yield) {
+			return
+		}
+	}
+}
+
 // -------------------------------------------------------
 // Helpers
 // -------------------------------------------------------
@@ -296,16 +314,17 @@ func runSerial[T, R any](seq iter.Seq[T], transform func(T) (R, error), ctx cont
 }
 
 // ParallelTryMap applies transform to each element of seq concurrently using batching.
-// Options can be provided to customize context, batch size, and number of workers.
+// Options can be provided to customize context, batch size, whether to preserve order, and number of workers.
 // batchSize determines how many elements are bundled into a single task to reduce channel overhead.
 // Recommended batchSize is between 64 and 1024 depending on the workload.
-// The order of elements is preserved.
+// if WithOrderStable(true) is set, the output order will match the input order, otherwise results may arrive out of order for better performance.
 func ParallelTryMap[T, R any](seq iter.Seq[T], transform func(T) (R, error), opts ...ParallelOption) iter.Seq2[R, error] {
 	// 1. Config Setup
 	cfg := parallelConfig{
-		ctx:       context.Background(),
-		batchSize: defaultBatchSize,
-		workers:   runtime.GOMAXPROCS(0),
+		ctx:         context.Background(),
+		batchSize:   defaultBatchSize,
+		workers:     runtime.GOMAXPROCS(0),
+		orderStable: defaultOrderStable,
 	}
 	for _, opt := range opts {
 		opt(&cfg)
@@ -343,7 +362,11 @@ func ParallelTryMap[T, R any](seq iter.Seq[T], transform func(T) (R, error), opt
 		// async close results channel, to close collector when all workers done
 		exec.startCloser()
 
-		// block collect results
-		exec.collect(yield)
+		switch cfg.orderStable {
+		case true:
+			exec.collect(yield)
+		case false:
+			exec.collectUnordered(yield)
+		}
 	}
 }

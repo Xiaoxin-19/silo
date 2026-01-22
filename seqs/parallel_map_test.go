@@ -31,7 +31,7 @@ func TestParallelTryMap_Correctness(t *testing.T) {
 	// 3. 执行并行 Map：简单的 x * 2
 	resultSeq := seqs.ParallelTryMap(seqInput, func(v int) (int, error) {
 		return v * 2, nil
-	}, seqs.WithWorkers(4), seqs.WithBatchSize(10), seqs.WithContext(t.Context()))
+	}, seqs.WithWorkers(4), seqs.WithBatchSize(10), seqs.WithContext(t.Context()), seqs.WithOrderStable(true))
 
 	// 4. 收集结果
 	var output []int
@@ -53,6 +53,49 @@ func TestParallelTryMap_Correctness(t *testing.T) {
 		if v != expected {
 			t.Errorf("at index %d: expected %d, got %d", i, expected, v)
 		}
+	}
+}
+
+func TestParallelTryMap_Unordered_Correctness(t *testing.T) {
+	// 1. 准备数据
+	inputSize := 1_000
+	seqInput := seqs.RandomIntRange(inputSize)
+
+	original := make([]int, 0, inputSize)
+	for v := range seqInput {
+		original = append(original, v)
+	}
+	seqInput = slices.Values(original)
+
+	// 2. 执行并行 Map (显式无序)
+	// 引入随机延迟以打破顺序
+	resultSeq := seqs.ParallelTryMap(seqInput, func(v int) (int, error) {
+		if v%2 == 0 {
+			time.Sleep(100 * time.Microsecond)
+		}
+		return v * 2, nil
+	}, seqs.WithWorkers(4), seqs.WithBatchSize(10), seqs.WithContext(t.Context()), seqs.WithOrderStable(false))
+
+	// 3. 收集结果
+	var output []int
+	for v, err := range resultSeq {
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		output = append(output, v)
+	}
+
+	// 4. 验证结果 (排序后对比)
+	slices.Sort(output)
+	// 构造期望值并排序 (original 已经是 0..N 随机，所以需要重新计算期望值并排序)
+	expected := make([]int, len(original))
+	for i, v := range original {
+		expected[i] = v * 2
+	}
+	slices.Sort(expected)
+
+	if !slices.Equal(output, expected) {
+		t.Errorf("Result mismatch (sorted comparison). Got len %d, want len %d", len(output), len(expected))
 	}
 }
 
@@ -221,7 +264,7 @@ func FuzzParallelTryMap(f *testing.F) {
 
 		// 2. Parallel Target
 		// Use small batch size to trigger batching logic even with small inputs
-		got, gotErr := collect(seqs.ParallelTryMap(slices.Values(input), transform, seqs.WithContext(t.Context()), seqs.WithBatchSize(4)))
+		got, gotErr := collect(seqs.ParallelTryMap(slices.Values(input), transform, seqs.WithContext(t.Context()), seqs.WithBatchSize(4), seqs.WithOrderStable(true)))
 
 		// 3. Compare
 		if (wantErr == nil) != (gotErr == nil) {
@@ -229,6 +272,82 @@ func FuzzParallelTryMap(f *testing.F) {
 		}
 		if !slices.Equal(got, want) {
 			t.Fatalf("Result mismatch.\nInput len: %d\nFailVal: %d\nGot:  %v\nWant: %v", len(input), failVal, got, want)
+		}
+	})
+}
+
+func FuzzParallelTryMap_Unordered(f *testing.F) {
+	f.Add([]byte{1, 2, 3, 4, 5}, byte(100))
+	f.Add([]byte{1, 2, 3, 4, 5}, byte(3))
+
+	f.Fuzz(func(t *testing.T, input []byte, failVal byte) {
+		transform := func(b byte) (byte, error) {
+			if b == failVal {
+				return 0, errors.New("mock error")
+			}
+			return b * 2, nil
+		}
+
+		collect := func(seq iter.Seq2[byte, error]) ([]byte, error) {
+			var res []byte
+			for v, err := range seq {
+				if err != nil {
+					return res, err
+				}
+				res = append(res, v)
+			}
+			return res, nil
+		}
+
+		// 1. Serial Baseline (Ordered)
+		want, wantErr := collect(seqs.TryMap(slices.Values(input), transform))
+
+		// 2. Parallel Target (Unordered)
+		got, gotErr := collect(seqs.ParallelTryMap(slices.Values(input), transform, seqs.WithContext(t.Context()), seqs.WithBatchSize(4), seqs.WithOrderStable(false)))
+
+		// 3. Compare Errors
+		if (wantErr == nil) != (gotErr == nil) {
+			t.Fatalf("Error mismatch: want %v, got %v", wantErr, gotErr)
+		}
+
+		// 4. Compare Values (Sort first)
+		slices.Sort(got)
+		slices.Sort(want)
+
+		if !slices.Equal(got, want) {
+			t.Fatalf("Result mismatch.\nInput len: %d\nFailVal: %d\nGot:  %v\nWant: %v", len(input), failVal, got, want)
+		}
+	})
+}
+
+func BenchmarkParallelTryMap_Order_Comparison(b *testing.B) {
+	count := 1_000_000
+	input := make([]int, count)
+	for i := range input {
+		input[i] = i
+	}
+
+	// 模拟一定的 CPU 负载，使并行有意义
+	work := func(v int) (int, error) {
+		for i := 0; i < 1000; i++ {
+			v = (v + i*i) % 10000
+		}
+		return v, nil
+	}
+
+	b.Run("Ordered", func(b *testing.B) {
+		b.SetBytes(int64(count * 8)) // 8 bytes per int (64-bit)
+		for i := 0; i < b.N; i++ {
+			for range seqs.ParallelTryMap(slices.Values(input), work, seqs.WithOrderStable(true)) {
+			}
+		}
+	})
+
+	b.Run("Unordered", func(b *testing.B) {
+		b.SetBytes(int64(count * 8))
+		for i := 0; i < b.N; i++ {
+			for range seqs.ParallelTryMap(slices.Values(input), work, seqs.WithOrderStable(false)) {
+			}
 		}
 	})
 }
