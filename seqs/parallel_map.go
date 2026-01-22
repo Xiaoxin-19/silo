@@ -2,6 +2,7 @@ package seqs
 
 import (
 	"context"
+	"fmt"
 	"iter"
 	"runtime"
 	"sync"
@@ -245,7 +246,18 @@ func (e *parallelMapExecutor[T, R]) processJob(job batchJob[T]) {
 			e.putChunk(job.chunk)
 			return
 		}
-		r, err := e.transform(v)
+
+		var r R
+		var err error
+		func() {
+			defer func() {
+				if p := recover(); p != nil {
+					err = fmt.Errorf("panic in transform: %v", p)
+				}
+			}()
+			r, err = e.transform(v)
+		}()
+
 		(*resPtr)[i] = resultTuple[R]{r, err}
 	}
 
