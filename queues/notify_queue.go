@@ -3,7 +3,13 @@ package queues
 import "sync"
 
 type NotifyQueue[T any] struct {
-	bq        *BlockingQueue[T]
+	mu       sync.Mutex
+	q        *ArrayQueue[T]
+	notEmpty *sync.Cond
+	notFull  *sync.Cond
+	limit    int
+	closed   bool
+
 	notifyCh  chan struct{} // Buffered channel to signal readiness, size 1, never closed
 	doneCh    chan struct{} // Closed when the queue is closed
 	closeOnce sync.Once
@@ -12,10 +18,25 @@ type NotifyQueue[T any] struct {
 // NewNotifyQueue creates a new NotifyQueue with the specified capacity.
 // If limit <= 0, the queue is unbounded.
 func NewNotifyQueue[T any](capacity int, limit int) *NotifyQueue[T] {
-	return &NotifyQueue[T]{
-		bq:       NewBlockingQueue[T](capacity, limit),
+	nq := &NotifyQueue[T]{
+		q:        NewArrayQueue[T](capacity),
+		limit:    limit,
 		notifyCh: make(chan struct{}, 1),
 		doneCh:   make(chan struct{}),
+	}
+	nq.notEmpty = sync.NewCond(&nq.mu)
+	nq.notFull = sync.NewCond(&nq.mu)
+	return nq
+}
+
+// signal ensures the notifyCh has a signal if the queue is not empty.
+// Must be called with lock held.
+func (nq *NotifyQueue[T]) signal() {
+	if nq.q.Size() > 0 {
+		select {
+		case nq.notifyCh <- struct{}{}:
+		default:
+		}
 	}
 }
 
@@ -23,93 +44,157 @@ func NewNotifyQueue[T any](capacity int, limit int) *NotifyQueue[T] {
 // If the queue is closed, it returns an error.
 // If try enqueue fails, it returns (false, nil).
 func (nq *NotifyQueue[T]) TryEnqueue(value T) (bool, error) {
-	success, err := nq.bq.TryEnqueue(value)
-	// Ensure signal is present
-	if success {
-		nq.sendReadySignal()
+	nq.mu.Lock()
+	defer nq.mu.Unlock()
+	if nq.closed {
+		return false, ErrQueueClosed
 	}
-	return success, err
+	if nq.limit > 0 && nq.q.Size() >= nq.limit {
+		return false, nil
+	}
+	nq.q.Enqueue(value)
+	nq.notEmpty.Signal()
+	nq.signal()
+	return true, nil
 }
 
 // Enqueue adds an element to the queue with blocking wait and submit a Ready signal.
 // If the queue is closed, it returns an error.
 // If try enqueue fails, it returns (false, nil).
 func (nq *NotifyQueue[T]) EnqueueOrWait(value T) error {
-	err := nq.bq.EnqueueOrWait(value)
-	// Ensure signal is present
-	if err == nil {
-		nq.sendReadySignal()
+	nq.mu.Lock()
+	defer nq.mu.Unlock()
+	if nq.closed {
+		return ErrQueueClosed
 	}
-	return err
+	for nq.limit > 0 && nq.q.Size() >= nq.limit {
+		nq.notFull.Wait()
+		if nq.closed {
+			return ErrQueueClosed
+		}
+	}
+	nq.q.Enqueue(value)
+	nq.notEmpty.Signal()
+	nq.signal()
+	return nil
 }
 
 // EnqueueBatch adds multiple elements to the queue and submit a Ready signal.
 // If the queue is closed, it returns an error.
 // If try enqueue fails, it returns (false, nil).
 func (nq *NotifyQueue[T]) TryEnqueueBatch(values ...T) (bool, error) {
-	success, err := nq.bq.TryEnqueueBatch(values)
-	// Ensure signal is present
-	if success {
-		nq.sendReadySignal()
+	nq.mu.Lock()
+	defer nq.mu.Unlock()
+	if nq.closed {
+		return false, ErrQueueClosed
 	}
-	return success, err
+	if nq.limit > 0 && nq.q.Size()+len(values) > nq.limit {
+		return false, nil
+	}
+	nq.q.EnqueueAll(values...)
+	nq.notEmpty.Signal()
+	nq.signal()
+	return true, nil
 }
 
 // EnqueueBatch adds multiple elements to the queue with blocking wait and submit a Ready signal.
 // If the queue is closed, it returns an error.
 // If try enqueue fails, it returns (false, nil).
 func (nq *NotifyQueue[T]) EnqueueBatchOrWait(values ...T) error {
-	err := nq.bq.EnqueueBatchOrWait(values)
-	// Ensure signal is present
-	if err == nil {
-		nq.sendReadySignal()
+	nq.mu.Lock()
+	defer nq.mu.Unlock()
+	if nq.closed {
+		return ErrQueueClosed
 	}
-	return err
+	for nq.limit > 0 && nq.q.Size()+len(values) > nq.limit {
+		nq.notFull.Wait()
+		if nq.closed {
+			return ErrQueueClosed
+		}
+	}
+	nq.q.EnqueueAll(values...)
+	nq.notEmpty.Signal()
+	nq.signal()
+	return nil
 }
 
 // Dequeue removes and returns an element from the queue.
 // If the queue is empty, it returns false.
 func (nq *NotifyQueue[T]) TryDequeue() (T, bool) {
-	val, ok := nq.bq.TryDequeue()
-	// If the queue is not empty, ensure signal is present
-	if ok {
-		nq.ensureNotifyCh()
+	nq.mu.Lock()
+	defer nq.mu.Unlock()
+	if nq.q.Size() == 0 {
+		var zero T
+		return zero, false
 	}
+	val, ok := nq.q.Dequeue()
+	if nq.limit > 0 {
+		nq.notFull.Signal()
+	}
+	nq.signal() // Re-signal if more items remain
 	return val, ok
 }
 
 // Dequeue removes and returns an element from the queue with blocking wait.
 // If the queue is empty, it blocks until data is available.
 func (nq *NotifyQueue[T]) DequeueOrWait() (T, bool) {
-	val, ok := nq.bq.DequeueOrWait()
-	// If the queue is not empty, ensure signal is present
-	nq.ensureNotifyCh()
+	nq.mu.Lock()
+	defer nq.mu.Unlock()
+	for nq.q.Size() == 0 {
+		nq.notEmpty.Wait()
+		if nq.closed {
+			var zero T
+			return zero, false
+		}
+	}
+	val, ok := nq.q.Dequeue()
+	if nq.limit > 0 {
+		nq.notFull.Signal()
+	}
+	nq.signal()
 	return val, ok
 }
 
 // TryDequeueBatchInto removes up to len(dst) elements from the queue and copies them into dst.
 // It returns the number of elements copied.
 func (nq *NotifyQueue[T]) TryDequeueBatchInto(dst []T) int {
-	count := nq.bq.TryDequeueBatchInto(dst)
-	// If the queue is not empty, ensure signal is present
-	if count > 0 {
-		nq.ensureNotifyCh()
+	nq.mu.Lock()
+	defer nq.mu.Unlock()
+	if nq.q.Size() == 0 {
+		return 0
 	}
+	count := nq.q.DequeueBatchInto(dst)
+	if nq.limit > 0 {
+		nq.notFull.Signal()
+	}
+	nq.signal()
 	return count
 }
 
 // DequeueBatchOrWait removes up to len(dst) elements from the queue into dst with blocking wait.
 // It returns the number of elements copied.
 func (nq *NotifyQueue[T]) DequeueBatchOrWait(dst []T) int {
-	count := nq.bq.DequeueBatchOrWait(dst)
-	// If the queue is not empty, ensure signal is present
-	nq.ensureNotifyCh()
+	nq.mu.Lock()
+	defer nq.mu.Unlock()
+	for nq.q.Size() == 0 {
+		nq.notEmpty.Wait()
+		if nq.closed {
+			return 0
+		}
+	}
+	count := nq.q.DequeueBatchInto(dst)
+	if nq.limit > 0 {
+		nq.notFull.Signal()
+	}
+	nq.signal()
 	return count
 }
 
 // Size returns the current number of elements in the queue.
 func (nq *NotifyQueue[T]) Size() int {
-	return nq.bq.Size()
+	nq.mu.Lock()
+	defer nq.mu.Unlock()
+	return nq.q.Size()
 }
 
 // Ready returns a channel that signals when the queue has data.
@@ -127,25 +212,21 @@ func (nq *NotifyQueue[T]) Done() <-chan struct{} {
 // Dequeue operations can still be performed until the queue is empty.
 func (nq *NotifyQueue[T]) Close() {
 	nq.closeOnce.Do(func() {
-		nq.bq.Close()
+		nq.mu.Lock()
+		defer nq.mu.Unlock()
+		if nq.closed {
+			return
+		}
+		nq.closed = true
+		nq.notFull.Broadcast()
+		nq.notEmpty.Broadcast()
 		close(nq.doneCh)
 	})
 }
 
 // IsClosed returns whether the queue has been closed.
 func (nq *NotifyQueue[T]) IsClosed() bool {
-	return nq.bq.IsClosed()
-}
-
-func (nq *NotifyQueue[T]) ensureNotifyCh() {
-	if nq.bq.Size() > 0 {
-		nq.sendReadySignal()
-	}
-}
-
-func (nq *NotifyQueue[T]) sendReadySignal() {
-	select {
-	case nq.notifyCh <- struct{}{}:
-	default:
-	}
+	nq.mu.Lock()
+	defer nq.mu.Unlock()
+	return nq.closed
 }
