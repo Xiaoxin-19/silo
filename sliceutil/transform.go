@@ -2,6 +2,7 @@ package sliceutil
 
 import (
 	"context"
+	"fmt"
 	"runtime"
 	"slices"
 	"sync"
@@ -326,7 +327,16 @@ func TryParallelMapWithContext[T any, R any](ctx context.Context, collection []T
 				default:
 				}
 
-				val, err := transform(collection[k])
+				var val R
+				var err error
+				func() {
+					defer func() {
+						if p := recover(); p != nil {
+							err = fmt.Errorf("panic in transform: %v", p)
+						}
+					}()
+					val, err = transform(collection[k])
+				}()
 
 				if err != nil {
 					// Set canceled flag
