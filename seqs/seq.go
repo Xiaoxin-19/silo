@@ -113,3 +113,51 @@ func RandomIntRange(size int) iter.Seq[int] {
 		}
 	}
 }
+
+func Bufferd[T any](seq iter.Seq[T], bufferSize int) iter.Seq[T] {
+	if bufferSize <= 0 {
+		bufferSize = 1
+	}
+	return func(yield func(T) bool) {
+		doneCh := make(chan struct{})
+		bufferCh := make(chan T, bufferSize)
+
+		go func() {
+			defer close(bufferCh)
+			for v := range seq {
+				select {
+				case bufferCh <- v:
+				case <-doneCh:
+					return
+				}
+			}
+		}()
+		defer close(doneCh)
+		for v := range bufferCh {
+			if !yield(v) {
+				return
+			}
+		}
+	}
+}
+
+func Batch[T any](seq iter.Seq[T], batchSize int) iter.Seq[[]T] {
+	if batchSize <= 0 {
+		batchSize = 1
+	}
+	return func(yield func([]T) bool) {
+		batch := make([]T, 0, batchSize)
+		for v := range seq {
+			batch = append(batch, v)
+			if len(batch) == batchSize {
+				if !yield(batch) {
+					return
+				}
+				batch = make([]T, 0, batchSize)
+			}
+		}
+		if len(batch) > 0 {
+			yield(batch)
+		}
+	}
+}
