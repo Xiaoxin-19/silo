@@ -2,6 +2,7 @@ package seqs
 
 import (
 	"context"
+	"fmt"
 	"iter"
 	"runtime"
 	"sync"
@@ -249,10 +250,10 @@ func runFilterSerial[T any](seq iter.Seq[T], predicate func(T) (bool, error), ct
 	}
 }
 
-// ParallelTryFilter filters elements of seq concurrently using batching.
+// BatchFilter filters elements of seq concurrently using batching.
 // batchSize determines how many elements are bundled into a single task to reduce channel overhead.
 // Recommended batchSize is between 64 and 1024 depending on the workload.
-func ParallelTryFilter[T any](seq iter.Seq[T], predicate func(T) (bool, error), opts ...ParallelOption) iter.Seq2[T, error] {
+func BatchFilter[T any](seq iter.Seq[T], predicate func(T) (bool, error), opts ...ParallelOption) iter.Seq2[T, error] {
 	cfg := parallelConfig{
 		ctx:       context.Background(),
 		batchSize: defaultBatchSize,
@@ -292,5 +293,82 @@ func ParallelTryFilter[T any](seq iter.Seq[T], predicate func(T) (bool, error), 
 
 		// Collect and reorder
 		executor.collect(yield)
+	}
+}
+
+// ParallelFilter filters elements of seq concurrently.
+// It returns a Seq2 that yields the original elements along with any error encountered during processing.
+// If workers <= 0, it defaults to 1.
+func ParallelFilter[T any](ctx context.Context, seq iter.Seq[T], predicate func(T) (bool, error), workers int) iter.Seq2[T, error] {
+	if workers <= 0 {
+		workers = 1
+	}
+	type resultType struct {
+		result T
+		err    error
+	}
+
+	return func(yield func(T, error) bool) {
+		sem := make(chan struct{}, workers)
+		resultCh := make(chan resultType, workers*2)
+		stopCh := make(chan struct{})
+		var stopOnce sync.Once
+		var wg sync.WaitGroup
+
+		go func() {
+			defer func() {
+				wg.Wait()
+				close(resultCh)
+				close(sem)
+			}()
+
+			for v := range seq {
+				select {
+				case <-ctx.Done():
+					return
+				case <-stopCh:
+					return
+				case sem <- struct{}{}:
+				}
+				wg.Add(1)
+				go func(val T) {
+					defer func() {
+						wg.Done()
+						<-sem
+						if r := recover(); r != nil {
+							var zero T
+							select {
+							case resultCh <- resultType{zero, fmt.Errorf("panic: %v", r)}:
+							case <-ctx.Done():
+							case <-stopCh:
+							}
+						}
+					}()
+					keep, err := predicate(val)
+					if err != nil {
+						select {
+						case resultCh <- resultType{val, err}:
+						case <-ctx.Done():
+						case <-stopCh:
+						}
+					} else if keep {
+						select {
+						case resultCh <- resultType{val, nil}:
+						case <-ctx.Done():
+						case <-stopCh:
+						}
+					}
+				}(v)
+			}
+		}()
+
+		for v := range resultCh {
+			if !yield(v.result, v.err) {
+				stopOnce.Do(func() {
+					close(stopCh)
+				})
+				break
+			}
+		}
 	}
 }

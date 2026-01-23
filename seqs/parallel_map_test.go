@@ -29,7 +29,7 @@ func TestParallelTryMap_Correctness(t *testing.T) {
 		}
 	}
 	// 3. 执行并行 Map：简单的 x * 2
-	resultSeq := seqs.ParallelTryMap(seqInput, func(v int) (int, error) {
+	resultSeq := seqs.BatchMap(seqInput, func(v int) (int, error) {
 		return v * 2, nil
 	}, seqs.WithWorkers(4), seqs.WithBatchSize(10), seqs.WithContext(t.Context()), seqs.WithOrderStable(true))
 
@@ -69,7 +69,7 @@ func TestParallelTryMap_Unordered_Correctness(t *testing.T) {
 
 	// 2. 执行并行 Map (显式无序)
 	// 引入随机延迟以打破顺序
-	resultSeq := seqs.ParallelTryMap(seqInput, func(v int) (int, error) {
+	resultSeq := seqs.BatchMap(seqInput, func(v int) (int, error) {
 		if v%2 == 0 {
 			time.Sleep(100 * time.Microsecond)
 		}
@@ -124,7 +124,7 @@ func TestParallelTryMap_Cancellation(t *testing.T) {
 	}
 
 	// 运行
-	resultSeq := seqs.ParallelTryMap(infiniteSeq, transform, seqs.WithContext(ctx), seqs.WithWorkers(4))
+	resultSeq := seqs.BatchMap(infiniteSeq, transform, seqs.WithContext(ctx), seqs.WithWorkers(4))
 
 	for _, err := range resultSeq {
 		if err != nil {
@@ -157,7 +157,7 @@ func TestParallelTryMap_Concurrency_Speedup(t *testing.T) {
 	}
 
 	// 执行耗时任务
-	seqs.ParallelTryMap(input, func(v int) (int, error) {
+	seqs.BatchMap(input, func(v int) (int, error) {
 		time.Sleep(taskDuration) // 模拟耗时
 		return v, nil
 	}, seqs.WithWorkers(workerCount), seqs.WithBatchSize(2), seqs.WithContext(t.Context()))(func(int, error) bool {
@@ -186,7 +186,7 @@ func TestParallelTryMap_ErrorHandling(t *testing.T) {
 	seqInput := slices.Values(input)
 
 	// 只有 3 会报错
-	resultSeq := seqs.ParallelTryMap(seqInput, func(v int) (int, error) {
+	resultSeq := seqs.BatchMap(seqInput, func(v int) (int, error) {
 		if v == 3 {
 			return 0, targetErr
 		}
@@ -264,7 +264,7 @@ func FuzzParallelTryMap(f *testing.F) {
 
 		// 2. Parallel Target
 		// Use small batch size to trigger batching logic even with small inputs
-		got, gotErr := collect(seqs.ParallelTryMap(slices.Values(input), transform, seqs.WithContext(t.Context()), seqs.WithBatchSize(4), seqs.WithOrderStable(true)))
+		got, gotErr := collect(seqs.BatchMap(slices.Values(input), transform, seqs.WithContext(t.Context()), seqs.WithBatchSize(4), seqs.WithOrderStable(true)))
 
 		// 3. Compare
 		if (wantErr == nil) != (gotErr == nil) {
@@ -303,7 +303,7 @@ func FuzzParallelTryMap_Unordered(f *testing.F) {
 		want, wantErr := collect(seqs.TryMap(slices.Values(input), transform))
 
 		// 2. Parallel Target (Unordered)
-		got, gotErr := collect(seqs.ParallelTryMap(slices.Values(input), transform, seqs.WithContext(t.Context()), seqs.WithBatchSize(4), seqs.WithOrderStable(false)))
+		got, gotErr := collect(seqs.BatchMap(slices.Values(input), transform, seqs.WithContext(t.Context()), seqs.WithBatchSize(4), seqs.WithOrderStable(false)))
 
 		// 3. Compare Errors
 		if (wantErr == nil) != (gotErr == nil) {
@@ -338,7 +338,7 @@ func BenchmarkParallelTryMap_Order_Comparison(b *testing.B) {
 	b.Run("Ordered", func(b *testing.B) {
 		b.SetBytes(int64(count * 8)) // 8 bytes per int (64-bit)
 		for i := 0; i < b.N; i++ {
-			for range seqs.ParallelTryMap(slices.Values(input), work, seqs.WithOrderStable(true)) {
+			for range seqs.BatchMap(slices.Values(input), work, seqs.WithOrderStable(true)) {
 			}
 		}
 	})
@@ -346,12 +346,103 @@ func BenchmarkParallelTryMap_Order_Comparison(b *testing.B) {
 	b.Run("Unordered", func(b *testing.B) {
 		b.SetBytes(int64(count * 8))
 		for i := 0; i < b.N; i++ {
-			for range seqs.ParallelTryMap(slices.Values(input), work, seqs.WithOrderStable(false)) {
+			for range seqs.BatchMap(slices.Values(input), work, seqs.WithOrderStable(false)) {
 			}
 		}
 	})
 }
 
+// -------------------------------------------------------
+// ParallelMap (Non-Batch) Tests
+// -------------------------------------------------------
+
+func TestParallelMap_Function_Correctness(t *testing.T) {
+	input := []int{1, 2, 3, 4, 5}
+	// ParallelMap is inherently unordered due to concurrency
+	seq := seqs.ParallelMap(context.Background(), slices.Values(input), func(v int) (int, error) {
+		return v * 2, nil
+	}, 2)
+
+	var got []int
+	for v, err := range seq {
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		got = append(got, v)
+	}
+	slices.Sort(got)
+	expected := []int{2, 4, 6, 8, 10}
+	if !slices.Equal(got, expected) {
+		t.Errorf("got %v, want %v", got, expected)
+	}
+}
+
+func TestParallelMap_Function_Panic(t *testing.T) {
+	seq := seqs.ParallelMap(context.Background(), slices.Values([]int{1}), func(v int) (int, error) {
+		panic("test panic")
+	}, 1)
+
+	for _, err := range seq {
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if err.Error() != "panic: test panic" {
+			t.Errorf("expected panic error, got %v", err)
+		}
+	}
+}
+
+func TestParallelMap_Function_Break(t *testing.T) {
+	// Infinite sequence
+	seq := func(yield func(int) bool) {
+		for i := 0; ; i++ {
+			if !yield(i) {
+				return
+			}
+		}
+	}
+
+	ctx := context.Background()
+	resultSeq := seqs.ParallelMap(ctx, seq, func(v int) (int, error) {
+		return v, nil
+	}, 4)
+
+	count := 0
+	for range resultSeq {
+		count++
+		if count >= 10 {
+			break
+		}
+	}
+	// Test passes if it doesn't hang
+}
+
+func FuzzParallelMap_Function(f *testing.F) {
+	f.Add([]byte{1, 2, 3, 4, 5}, byte(100))
+	f.Add([]byte{1, 2, 3, 4, 5}, byte(3))
+
+	f.Fuzz(func(t *testing.T, input []byte, failVal byte) {
+		transform := func(b byte) (byte, error) {
+			if b == failVal {
+				return 0, errors.New("mock error")
+			}
+			return b * 2, nil
+		}
+
+		// ParallelMap (Unordered)
+		gotSeq := seqs.ParallelMap(context.Background(), slices.Values(input), transform, 4)
+
+		var got []byte
+		for v, _ := range gotSeq {
+			// ParallelMap yields results even if other items failed, we just collect values here
+			got = append(got, v)
+		}
+		// Since ParallelMap output includes zero values on error/panic, strict comparison is complex in Fuzz.
+		// We mainly ensure it doesn't crash.
+	})
+}
+
 /*
 go test -v -count=1 -fullpath=true -fuzz=FuzzParallelTryMap -fuzztime 30s -run "^(TestParallelTryMap_Correctness|TestParallelTryMap_Cancellation|TestParallelTryMap_Concurrency_Speedup|TestParallelTryMap_ErrorHandling|FuzzParallelTryMap)$" silo/seqs
+go test -v -count=1 -fullpath=true -fuzz=FuzzParallelMap_Function -fuzztime 30s -run "^(TestParallelMap_Function_Correctness|TestParallelMap_Function_Panic|TestParallelMap_Function_Break|FuzzParallelMap_Function)$" silo/seqs
 */

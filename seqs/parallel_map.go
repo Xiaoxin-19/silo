@@ -325,12 +325,12 @@ func runSerial[T, R any](seq iter.Seq[T], transform func(T) (R, error), ctx cont
 	}
 }
 
-// ParallelTryMap applies transform to each element of seq concurrently using batching.
+// BatchMap applies transform to each element of seq concurrently using batching.
 // Options can be provided to customize context, batch size, whether to preserve order, and number of workers.
 // batchSize determines how many elements are bundled into a single task to reduce channel overhead.
 // Recommended batchSize is between 64 and 1024 depending on the workload.
 // if WithOrderStable(true) is set, the output order will match the input order, otherwise results may arrive out of order for better performance.
-func ParallelTryMap[T, R any](seq iter.Seq[T], transform func(T) (R, error), opts ...ParallelOption) iter.Seq2[R, error] {
+func BatchMap[T, R any](seq iter.Seq[T], transform func(T) (R, error), opts ...ParallelOption) iter.Seq2[R, error] {
 	// 1. Config Setup
 	cfg := parallelConfig{
 		ctx:         context.Background(),
@@ -379,6 +379,75 @@ func ParallelTryMap[T, R any](seq iter.Seq[T], transform func(T) (R, error), opt
 			exec.collect(yield)
 		case false:
 			exec.collectUnordered(yield)
+		}
+	}
+}
+
+// ParallelMap applies transform to each element of seq in parallel using the specified number of workers.
+// It returns a Seq2 that yields the transformed elements along with any error encountered during processing.
+// If workers <= 0, it defaults to 1.
+func ParallelMap[T, R any](ctx context.Context, seq iter.Seq[T], transform func(T) (R, error), workers int) iter.Seq2[R, error] {
+	if workers <= 0 {
+		workers = 1
+	}
+	type resultType struct {
+		result R
+		err    error
+	}
+
+	return func(yield func(R, error) bool) {
+		stopCh := make(chan struct{})
+		resultCh := make(chan resultType, workers*3)
+		sem := make(chan struct{}, workers)
+		var stopOnce sync.Once
+		var wg sync.WaitGroup
+
+		go func() {
+			defer func() {
+				wg.Wait()
+				close(resultCh)
+				close(sem)
+			}()
+			for v := range seq {
+				select {
+				case <-ctx.Done():
+					return
+				case <-stopCh:
+					return
+				case sem <- struct{}{}:
+				}
+				wg.Add(1)
+				go func(val T) {
+					defer func() {
+						wg.Done()
+						<-sem
+						if r := recover(); r != nil {
+							var zero R
+							select {
+							case resultCh <- resultType{zero, fmt.Errorf("panic: %v", r)}:
+							case <-ctx.Done():
+							case <-stopCh:
+							}
+						}
+					}()
+					res, err := transform(val)
+
+					select {
+					case resultCh <- resultType{res, err}:
+					case <-ctx.Done():
+					case <-stopCh:
+					}
+				}(v)
+			}
+		}()
+
+		for v := range resultCh {
+			if !yield(v.result, v.err) {
+				stopOnce.Do(func() {
+					close(stopCh)
+				})
+				return
+			}
 		}
 	}
 }

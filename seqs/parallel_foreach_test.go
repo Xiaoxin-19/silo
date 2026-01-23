@@ -25,7 +25,7 @@ func TestParallelForeach_Correctness(t *testing.T) {
 		return nil
 	}
 
-	seqs.ParallelForeach(context.Background(), slices.Values(input), handler, seqs.WithBatcherSize[int](10))
+	seqs.BatchForeach(context.Background(), slices.Values(input), handler, seqs.WithBatcherSize[int](10))
 
 	if processed.Load() != int32(count) {
 		t.Errorf("Expected %d items, got %d", count, processed.Load())
@@ -48,7 +48,7 @@ func TestParallelForeach_Concurrency(t *testing.T) {
 	}
 
 	start := time.Now()
-	seqs.ParallelForeach(context.Background(), slices.Values(input), handler,
+	seqs.BatchForeach(context.Background(), slices.Values(input), handler,
 		seqs.WithBatcherSize[int](batchSize),
 		seqs.WithConcurrency[int](workers),
 	)
@@ -83,7 +83,7 @@ func TestParallelForeach_ErrorHandling(t *testing.T) {
 	}
 
 	// BatchSize=1 确保调用 5 次 handler
-	seqs.ParallelForeach(context.Background(), slices.Values(input), handler,
+	seqs.BatchForeach(context.Background(), slices.Values(input), handler,
 		seqs.WithBatcherSize[int](1),
 		seqs.WithErrorHandler(errHandler),
 	)
@@ -118,7 +118,7 @@ func TestParallelForeach_Cancellation(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		seqs.ParallelForeach(ctx, infiniteSeq, handler, seqs.WithBatcherSize[int](10), seqs.WithConcurrency[int](4))
+		seqs.BatchForeach(ctx, infiniteSeq, handler, seqs.WithBatcherSize[int](10), seqs.WithConcurrency[int](4))
 		close(done)
 	}()
 
@@ -155,7 +155,7 @@ func FuzzParallelForeach(f *testing.F) {
 			return nil
 		}
 
-		seqs.ParallelForeach(context.Background(), slices.Values(input), handler, seqs.WithBatcherSize[int](batchSize))
+		seqs.BatchForeach(context.Background(), slices.Values(input), handler, seqs.WithBatcherSize[int](batchSize))
 
 		if processed.Load() != int32(count) {
 			t.Errorf("Count mismatch: want %d, got %d", count, processed.Load())
@@ -196,7 +196,7 @@ func BenchmarkParallelForeach(b *testing.B) {
 
 	b.Run("Parallel_Batch100_Workers4", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			seqs.ParallelForeach(context.Background(), slices.Values(input), handler,
+			seqs.BatchForeach(context.Background(), slices.Values(input), handler,
 				seqs.WithBatcherSize[int](100),
 				seqs.WithConcurrency[int](4),
 			)
@@ -205,10 +205,104 @@ func BenchmarkParallelForeach(b *testing.B) {
 
 	b.Run("Parallel_Batch1000_Workers8", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			seqs.ParallelForeach(context.Background(), slices.Values(input), handler,
+			seqs.BatchForeach(context.Background(), slices.Values(input), handler,
 				seqs.WithBatcherSize[int](1000),
 				seqs.WithConcurrency[int](8),
 			)
+		}
+	})
+}
+
+// -------------------------------------------------------
+// ParallelForeach (Non-Batch) Tests
+// -------------------------------------------------------
+
+func TestParallelForeach_Function_Correctness(t *testing.T) {
+	input := []int{1, 2, 3, 4, 5}
+	var processed atomic.Int32
+
+	seq := seqs.ParallelForeach(context.Background(), slices.Values(input), func(v int) error {
+		processed.Add(1)
+		return nil
+	}, 2)
+
+	count := 0
+	for _, err := range seq {
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		count++
+	}
+
+	if count != 5 {
+		t.Errorf("expected 5 items yielded, got %d", count)
+	}
+	if processed.Load() != 5 {
+		t.Errorf("expected 5 items processed, got %d", processed.Load())
+	}
+}
+
+func TestParallelForeach_Function_Panic(t *testing.T) {
+	seq := seqs.ParallelForeach(context.Background(), slices.Values([]int{1}), func(v int) error {
+		panic("foreach panic")
+	}, 1)
+
+	for _, err := range seq {
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if err.Error() != "panic: foreach panic" {
+			t.Errorf("expected panic error, got %v", err)
+		}
+	}
+}
+
+func TestParallelForeach_Function_Break(t *testing.T) {
+	seq := func(yield func(int) bool) {
+		for i := 0; ; i++ {
+			if !yield(i) {
+				return
+			}
+		}
+	}
+
+	resultSeq := seqs.ParallelForeach(context.Background(), seq, func(v int) error {
+		return nil
+	}, 4)
+
+	count := 0
+	for range resultSeq {
+		count++
+		if count >= 10 {
+			break
+		}
+	}
+}
+
+func FuzzParallelForeach_Function(f *testing.F) {
+	f.Add([]byte{1, 2, 3, 4, 5}, byte(100))
+	f.Fuzz(func(t *testing.T, input []byte, failVal byte) {
+		handler := func(b byte) error {
+			if b == failVal {
+				return errors.New("mock error")
+			}
+			return nil
+		}
+
+		seq := seqs.ParallelForeach(context.Background(), slices.Values(input), handler, 4)
+
+		var got []byte
+		for v, _ := range seq {
+			got = append(got, v)
+		}
+		slices.Sort(got)
+
+		// Input is also expected output (keys)
+		want := slices.Clone(input)
+		slices.Sort(want)
+
+		if !slices.Equal(got, want) {
+			t.Errorf("Result mismatch. Got %v, Want %v", got, want)
 		}
 	})
 }

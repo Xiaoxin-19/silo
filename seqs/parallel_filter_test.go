@@ -24,7 +24,7 @@ func TestParallelTryFilter_Correctness(t *testing.T) {
 	seqInput = slices.Values(original)
 
 	// 2. 执行并行 Filter：保留偶数
-	resultSeq := seqs.ParallelTryFilter(seqInput, func(v int) (bool, error) {
+	resultSeq := seqs.BatchFilter(seqInput, func(v int) (bool, error) {
 		return v%2 == 0, nil
 	}, seqs.WithWorkers(4), seqs.WithBatchSize(10), seqs.WithContext(t.Context()))
 
@@ -75,7 +75,7 @@ func TestParallelTryFilter_Cancellation(t *testing.T) {
 	}
 
 	// 运行
-	for range seqs.ParallelTryFilter(infiniteSeq, predicate, seqs.WithContext(ctx), seqs.WithWorkers(4)) {
+	for range seqs.BatchFilter(infiniteSeq, predicate, seqs.WithContext(ctx), seqs.WithWorkers(4)) {
 		processedCount++
 	}
 
@@ -92,7 +92,7 @@ func TestParallelTryFilter_ErrorHandling(t *testing.T) {
 	seqInput := slices.Values(input)
 
 	// 只有 3 会报错
-	resultSeq := seqs.ParallelTryFilter(seqInput, func(v int) (bool, error) {
+	resultSeq := seqs.BatchFilter(seqInput, func(v int) (bool, error) {
 		if v == 3 {
 			return false, targetErr
 		}
@@ -143,7 +143,7 @@ func TestParallelTryFilter_Concurrency_Speedup(t *testing.T) {
 	}
 
 	// 执行耗时任务
-	seqs.ParallelTryFilter(input, func(v int) (bool, error) {
+	seqs.BatchFilter(input, func(v int) (bool, error) {
 		time.Sleep(taskDuration)
 		return true, nil
 	}, seqs.WithWorkers(workerCount), seqs.WithBatchSize(2), seqs.WithContext(t.Context()))(func(int, error) bool {
@@ -208,7 +208,7 @@ func FuzzParallelTryFilter(f *testing.F) {
 
 		// 2. 目标测试：并行 ParallelTryFilter
 		// 使用较小的 BatchSize 以在小数据量下也能触发并行逻辑
-		got, gotErr := collect(t, seqs.ParallelTryFilter(slices.Values(input), predicate, seqs.WithContext(t.Context()), seqs.WithBatchSize(4)))
+		got, gotErr := collect(t, seqs.BatchFilter(slices.Values(input), predicate, seqs.WithContext(t.Context()), seqs.WithBatchSize(4)))
 
 		// 3. 对比
 		if (wantErr == nil) != (gotErr == nil) {
@@ -224,3 +224,99 @@ func FuzzParallelTryFilter(f *testing.F) {
 /*
  go test -race -fullpath=true -v -count=1 -fuzz=FuzzParallelTryFilter -fuzztime 30s  -run "^(TestParallelTryFilter_Correctness|TestParallelTryFilter_Cancellation|TestParallelTryFilter_ErrorHandling|TestParallelTryFilter_Concurrency_Speedup|FuzzParallelTryFilter)$" silo/seqs
 */
+
+// -------------------------------------------------------
+// ParallelFilter (Non-Batch) Tests
+// -------------------------------------------------------
+
+func TestParallelFilter_Function_Correctness(t *testing.T) {
+	input := []int{1, 2, 3, 4, 5, 6}
+	// Keep evens
+	seq := seqs.ParallelFilter(context.Background(), slices.Values(input), func(v int) (bool, error) {
+		return v%2 == 0, nil
+	}, 2)
+
+	var got []int
+	for v, err := range seq {
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		got = append(got, v)
+	}
+	slices.Sort(got)
+	expected := []int{2, 4, 6}
+	if !slices.Equal(got, expected) {
+		t.Errorf("got %v, want %v", got, expected)
+	}
+}
+
+func TestParallelFilter_Function_Panic(t *testing.T) {
+	seq := seqs.ParallelFilter(context.Background(), slices.Values([]int{1}), func(v int) (bool, error) {
+		panic("filter panic")
+	}, 1)
+
+	for _, err := range seq {
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if err.Error() != "panic: filter panic" {
+			t.Errorf("expected panic error, got %v", err)
+		}
+	}
+}
+
+func TestParallelFilter_Function_Break(t *testing.T) {
+	seq := func(yield func(int) bool) {
+		for i := 0; ; i++ {
+			if !yield(i) {
+				return
+			}
+		}
+	}
+
+	resultSeq := seqs.ParallelFilter(context.Background(), seq, func(v int) (bool, error) {
+		return true, nil
+	}, 4)
+
+	count := 0
+	for range resultSeq {
+		count++
+		if count >= 10 {
+			break
+		}
+	}
+}
+
+func FuzzParallelFilter_Function(f *testing.F) {
+	f.Add([]byte{1, 2, 3, 4, 5}, byte(100))
+	f.Fuzz(func(t *testing.T, input []byte, failVal byte) {
+		predicate := func(b byte) (bool, error) {
+			if b == failVal {
+				return false, errors.New("mock error")
+			}
+			return b%2 == 0, nil
+		}
+
+		seq := seqs.ParallelFilter(context.Background(), slices.Values(input), predicate, 4)
+
+		var got []byte
+		for v, err := range seq {
+			if err == nil {
+				got = append(got, v)
+			}
+		}
+		slices.Sort(got)
+
+		var want []byte
+		for _, b := range input {
+			if b != failVal && b%2 == 0 {
+				want = append(want, b)
+			}
+		}
+		slices.Sort(want)
+
+		if !slices.Equal(got, want) {
+			t.Errorf("Result mismatch. Got %v, Want %v", got, want)
+		}
+	})
+}

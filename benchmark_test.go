@@ -79,12 +79,12 @@ func BenchmarkUnified_Map(b *testing.B) {
 			b.Run("Seq_Parallel_Ordered", func(b *testing.B) {
 				for b.Loop() {
 					if wl.name == "Heavy" {
-						for range seqs.ParallelTryMap(slices.Values(input), wl.transformErr, seqs.WithContext(b.Context()), seqs.WithOrderStable(true)) {
+						for range seqs.BatchMap(slices.Values(input), wl.transformErr, seqs.WithContext(b.Context()), seqs.WithOrderStable(true)) {
 						}
 					}
 
 					if wl.name == "Light" {
-						for range seqs.ParallelTryMap(slices.Values(input), wl.transformErr, seqs.WithBatchSize(2048), seqs.WithContext(b.Context()), seqs.WithOrderStable(true)) {
+						for range seqs.BatchMap(slices.Values(input), wl.transformErr, seqs.WithBatchSize(2048), seqs.WithContext(b.Context()), seqs.WithOrderStable(true)) {
 						}
 					}
 				}
@@ -93,12 +93,12 @@ func BenchmarkUnified_Map(b *testing.B) {
 			b.Run("Seq_Parallel_Unordered", func(b *testing.B) {
 				for b.Loop() {
 					if wl.name == "Heavy" {
-						for range seqs.ParallelTryMap(slices.Values(input), wl.transformErr, seqs.WithContext(b.Context()), seqs.WithOrderStable(false)) {
+						for range seqs.BatchMap(slices.Values(input), wl.transformErr, seqs.WithContext(b.Context()), seqs.WithOrderStable(false)) {
 						}
 					}
 
 					if wl.name == "Light" {
-						for range seqs.ParallelTryMap(slices.Values(input), wl.transformErr, seqs.WithBatchSize(2048), seqs.WithContext(b.Context()), seqs.WithOrderStable(false)) {
+						for range seqs.BatchMap(slices.Values(input), wl.transformErr, seqs.WithBatchSize(2048), seqs.WithContext(b.Context()), seqs.WithOrderStable(false)) {
 						}
 					}
 
@@ -162,7 +162,7 @@ func BenchmarkUnified_Foreach(b *testing.B) {
 							return nil
 						}
 						for b.Loop() {
-							seqs.ParallelForeach(context.Background(), slices.Values(input), handler,
+							seqs.BatchForeach(context.Background(), slices.Values(input), handler,
 								seqs.WithBatcherSize[int](1024),
 								seqs.WithConcurrency[int](runtime.GOMAXPROCS(0)),
 							)
@@ -246,13 +246,13 @@ func BenchmarkUnified_Filter(b *testing.B) {
 			b.Run("Seq_Parallel_Batch", func(b *testing.B) {
 				for b.Loop() {
 					if wl.name == "Heavy" {
-						for range seqs.ParallelTryFilter(slices.Values(input), wl.predicateErr, seqs.WithContext(b.Context())) {
+						for range seqs.BatchFilter(slices.Values(input), wl.predicateErr, seqs.WithContext(b.Context())) {
 						}
 					}
 
 					if wl.name == "Light" {
 						count := 0
-						for v, err := range seqs.ParallelTryFilter(slices.Values(input), wl.predicateErr, seqs.WithContext(b.Context()), seqs.WithBatchSize(1024)) {
+						for v, err := range seqs.BatchFilter(slices.Values(input), wl.predicateErr, seqs.WithContext(b.Context()), seqs.WithBatchSize(1024)) {
 							count += v
 							if err != nil {
 								b.Fatal(err)
