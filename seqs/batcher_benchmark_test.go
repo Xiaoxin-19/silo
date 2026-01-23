@@ -146,7 +146,7 @@ func runOverheadComparison[T any](b *testing.B, batchSize int, workers int, fact
 
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				q.EnqueueOrWait(factory(i))
+				q.EnqueueOrWait(context.Background(), factory(i))
 			}
 			q.Close()
 			wg.Wait()
@@ -182,12 +182,12 @@ func runOverheadComparison[T any](b *testing.B, batchSize int, workers int, fact
 			for i := 0; i < b.N; i++ {
 				buffer = append(buffer, factory(i))
 				if len(buffer) >= batchSize {
-					q.EnqueueBatchOrWait(buffer...)
+					q.EnqueueBatchOrWait(context.Background(), buffer...)
 					buffer = buffer[:0] // Reuse buffer memory since queue copies data
 				}
 			}
 			if len(buffer) > 0 {
-				q.EnqueueBatchOrWait(buffer...)
+				q.EnqueueBatchOrWait(context.Background(), buffer...)
 			}
 			q.Close()
 			wg.Wait()
@@ -258,7 +258,7 @@ func BenchmarkBatcher_Workload_Scaling(b *testing.B) {
 
 					b.ResetTimer()
 					for i := 0; i < b.N; i++ {
-						q.EnqueueOrWait(i)
+						q.EnqueueOrWait(context.Background(), i)
 					}
 					q.Close()
 					wg.Wait()

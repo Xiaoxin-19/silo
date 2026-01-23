@@ -1,6 +1,7 @@
 package queues_test
 
 import (
+	"context"
 	"fmt"
 	"silo/queues"
 	"sync"
@@ -45,14 +46,16 @@ func (m *ModeItem[T]) Setup(capacity int) {
 	m.q = queues.NewNotifyQueue[T](capacity, capacity)
 }
 func (m *ModeItem[T]) Produce(items []T) {
+	ctx := context.Background()
 	// Simulate loop of single items (High lock contention)
 	for _, item := range items {
-		m.q.EnqueueOrWait(item)
+		m.q.EnqueueOrWait(ctx, item)
 	}
 }
 func (m *ModeItem[T]) Consume(count int) {
+	ctx := context.Background()
 	for i := 0; i < count; i++ {
-		m.q.DequeueOrWait()
+		m.q.DequeueOrWait(ctx)
 	}
 }
 
@@ -67,14 +70,12 @@ func (m *ModeBatchCopy[T]) Setup(capacity int) {
 	m.q = queues.NewNotifyQueue[T](capacity, capacity)
 }
 func (m *ModeBatchCopy[T]) Produce(items []T) {
+	ctx := context.Background()
 	// One lock acquisition, but O(N) memory copy
-	m.q.EnqueueBatchOrWait(items...)
+	m.q.EnqueueBatchOrWait(ctx, items...)
 }
 func (m *ModeBatchCopy[T]) Consume(count int) {
-	// We consume in batches to match the production logic for throughput
-	// Assuming consumer also wants batch efficiency
-	// Note: 'count' here is total items.
-	// We need to consume until we get 'count' items.
+	ctx := context.Background()
 	remaining := count
 	buf := make([]T, 128) // Use a fixed buffer for consumption
 	for remaining > 0 {
@@ -82,7 +83,7 @@ func (m *ModeBatchCopy[T]) Consume(count int) {
 		if remaining < toRead {
 			toRead = remaining
 		}
-		n := m.q.DequeueBatchOrWait(buf[:toRead])
+		n := m.q.DequeueBatchOrWait(ctx, buf[:toRead])
 		remaining -= n
 	}
 }
@@ -101,23 +102,12 @@ func (m *ModeSlicePointer[T]) Setup(capacity int) {
 func (m *ModeSlicePointer[T]) Produce(items []T) {
 	// Enqueue the slice header as a single unit (O(1) copy)
 	// IMPORTANT: In real code, 'items' ownership is transferred!
-	m.q.EnqueueOrWait(items)
+	ctx := context.Background()
+	m.q.EnqueueOrWait(ctx, items)
 }
 func (m *ModeSlicePointer[T]) Consume(count int) {
-	// Here 'count' is total items.
-	// But in this mode, one Dequeue = one batch of items.
-	// We need to know the batch size to know how many dequeues to do?
-	// Or we just consume 'ops' times.
-
-	// For benchmarking, Produce is called with a 'batch'.
-	// So 1 Produce call = 1 Dequeue call here.
-	// But the interface says 'Consume(count int)'.
-	// To make it work, we assume Consume is called with number of *Batches* for this mode,
-	// or we adjust the driver.
-
-	// Let's adjust the driver logic to be simpler:
-	// The benchmark loop N is "Number of Produce calls".
-	m.q.DequeueOrWait()
+	ctx := context.Background()
+	m.q.DequeueOrWait(ctx)
 }
 
 // ==========================================

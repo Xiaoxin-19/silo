@@ -36,7 +36,7 @@ func TestBatcher_Basic(t *testing.T) {
 
 	// Enqueue 25 items
 	for i := 0; i < 25; i++ {
-		q.EnqueueOrWait(i)
+		q.EnqueueOrWait(context.Background(), i)
 	}
 
 	// Close queue to trigger drain
@@ -74,7 +74,7 @@ func TestBatcher_PeriodicFlush(t *testing.T) {
 	go b.Run(ctx)
 
 	// Enqueue 1 item
-	q.EnqueueOrWait(1)
+	q.EnqueueOrWait(context.Background(), 1)
 
 	select {
 	case batch := <-received:
@@ -109,7 +109,7 @@ func TestBatcher_ContextCancel_FlushBuffer(t *testing.T) {
 
 	// Enqueue 5 items (less than batch size 10)
 	for i := 0; i < 5; i++ {
-		q.EnqueueOrWait(i)
+		q.EnqueueOrWait(context.Background(), i)
 	}
 
 	// Give dispatcher time to pick up items into buffer
@@ -152,7 +152,7 @@ func TestBatcher_WorkerPanic(t *testing.T) {
 	defer cancel()
 	go b.Run(ctx)
 
-	q.EnqueueOrWait("panic")
+	q.EnqueueOrWait(context.Background(), "panic")
 
 	select {
 	case err := <-errCh:
@@ -191,7 +191,7 @@ func TestBatcher_ShutdownTimeout(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	go b.Run(ctx)
 
-	q.EnqueueOrWait(1)
+	q.EnqueueOrWait(context.Background(), 1)
 	time.Sleep(10 * time.Millisecond) // Ensure worker started
 	cancel()                          // Trigger shutdown
 
@@ -236,7 +236,7 @@ func TestBatcher_Concurrency_Race(t *testing.T) {
 		go func() {
 			defer prodWg.Done()
 			for j := 0; j < target/10; j++ {
-				q.EnqueueOrWait(j)
+				q.EnqueueOrWait(context.Background(), j)
 			}
 		}()
 	}
@@ -284,7 +284,7 @@ func FuzzBatcher(f *testing.F) {
 		}()
 
 		for i := 0; i < inputCount; i++ {
-			q.EnqueueOrWait(i)
+			q.EnqueueOrWait(context.Background(), i)
 		}
 		q.Close()
 		wg.Wait()

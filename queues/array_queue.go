@@ -22,7 +22,7 @@ func NewArrayQueue[T any](initialCapacity int) *ArrayQueue[T] {
 	if initialCapacity <= 1 {
 		capacity = 1
 	} else {
-		// use math/bits to quickly compute (see the single line code above)
+		// use math/bits to quickly compute
 		capacity = 1 << uint(bits.Len(uint(initialCapacity-1)))
 	}
 

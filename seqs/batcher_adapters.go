@@ -35,7 +35,7 @@ func (q *ChannelQueue[T]) ingest() {
 	defer q.Close()
 	for item := range q.input {
 		// EnqueueOrWait blocks if the queue is full, providing backpressure.
-		if err := q.EnqueueOrWait(item); err != nil {
+		if err := q.EnqueueOrWait(context.Background(), item); err != nil {
 			return // Queue closed
 		}
 	}
@@ -84,7 +84,7 @@ func (q *SeqQueue[T]) ingest() {
 	for item := range q.seq {
 		buffer = append(buffer, item)
 		if len(buffer) >= q.batchSize {
-			if err := q.EnqueueBatchOrWait(buffer...); err != nil {
+			if err := q.EnqueueBatchOrWait(context.Background(), buffer...); err != nil {
 				return
 			}
 			// Allocate new buffer to prevent data race if the queue retains the slice
@@ -93,7 +93,7 @@ func (q *SeqQueue[T]) ingest() {
 	}
 	// Flush remaining
 	if len(buffer) > 0 {
-		q.EnqueueBatchOrWait(buffer...)
+		q.EnqueueBatchOrWait(context.Background(), buffer...)
 	}
 }
 
@@ -138,7 +138,7 @@ func (q *FetcherQueue[T]) loop() {
 		if err != nil {
 			return
 		}
-		if err := q.EnqueueOrWait(val); err != nil {
+		if err := q.EnqueueOrWait(q.ctx, val); err != nil {
 			return
 		}
 	}

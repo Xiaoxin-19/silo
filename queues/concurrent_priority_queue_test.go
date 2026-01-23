@@ -6,9 +6,6 @@ import (
 	"testing"
 )
 
-// Reusing intExtractor from block_priority_queue_test.go if in same package context,
-// but since files are compiled together in package queues_test, we can reuse it or redefine it locally if needed to avoid confusion.
-// To be safe and explicit, I'll use a local lambda or redefine it.
 func intExtractorCPQ(val int) int64 {
 	return int64(val)
 }
@@ -80,30 +77,30 @@ func TestConcurrentPriorityQueue_BasicOperations(t *testing.T) {
 
 func TestConcurrentPriorityQueue_ItemOperations(t *testing.T) {
 	// Test UpdateItem and RemoveItem via thread-safe wrapper
-	
+
 	// MinHeap
 	cpq := queues.NewConcurrentPriorityQueue[int](10, true, intExtractorCPQ)
-	
+
 	item1 := cpq.Enqueue(10)
 	item2 := cpq.Enqueue(20)
 	cpq.Enqueue(30)
-	
+
 	// Remove item2 (20)
 	cpq.RemoveItem(item2)
-	
+
 	if cpq.Size() != 2 {
 		t.Errorf("expected size 2 after removal, got %d", cpq.Size())
 	}
-	
+
 	// Update item1 (10 -> 40), now order should be 30, 40
 	item1.Value = 40
 	cpq.UpdateItem(item1)
-	
+
 	val, _ := cpq.Dequeue()
 	if val != 30 {
 		t.Errorf("expected 30, got %d", val)
 	}
-	
+
 	val, _ = cpq.Dequeue()
 	if val != 40 {
 		t.Errorf("expected 40, got %d", val)
@@ -112,7 +109,7 @@ func TestConcurrentPriorityQueue_ItemOperations(t *testing.T) {
 
 func TestConcurrentPriorityQueue_Empty(t *testing.T) {
 	cpq := queues.NewConcurrentPriorityQueue[int](10, true, intExtractorCPQ)
-	
+
 	if _, ok := cpq.Dequeue(); ok {
 		t.Error("Dequeue on empty queue should return false")
 	}
