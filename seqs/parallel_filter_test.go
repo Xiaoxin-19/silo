@@ -14,7 +14,7 @@ import (
 func TestParallelTryFilter_Correctness(t *testing.T) {
 	// 1. 准备数据
 	inputSize := 1_000
-	seqInput := seqs.RandomIntRange(inputSize)
+	seqInput := seqs.RandomInts(inputSize)
 
 	// 捕获原始数据用于验证
 	original := make([]int, 0, inputSize)

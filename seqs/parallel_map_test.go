@@ -14,7 +14,7 @@ import (
 func TestParallelTryMap_Correctness(t *testing.T) {
 	// 1. 准备数据：1000 个整数
 	inputSize := 1_000
-	seqInput := seqs.RandomIntRange(inputSize)
+	seqInput := seqs.RandomInts(inputSize)
 
 	original := make([]int, 0, inputSize)
 	for v := range seqInput {
@@ -59,7 +59,7 @@ func TestParallelTryMap_Correctness(t *testing.T) {
 func TestParallelTryMap_Unordered_Correctness(t *testing.T) {
 	// 1. 准备数据
 	inputSize := 1_000
-	seqInput := seqs.RandomIntRange(inputSize)
+	seqInput := seqs.RandomInts(inputSize)
 
 	original := make([]int, 0, inputSize)
 	for v := range seqInput {

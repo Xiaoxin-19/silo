@@ -2,8 +2,6 @@ package seqs
 
 import (
 	"iter"
-	"math/rand"
-	"time"
 )
 
 // Filter applies predicate to each element of seq, yielding only those that satisfy the predicate.
@@ -92,8 +90,9 @@ func Reduce[T, R any](seq iter.Seq[T], initial R, reducer func(R, T) R) R {
 // If reducer returns an error, it is returned immediately.
 func TryReduce[T, R any](seq iter.Seq[T], initial R, reducer func(R, T) (R, error)) (R, error) {
 	acc := initial
+	var err error
 	for v := range seq {
-		acc, err := reducer(acc, v)
+		acc, err = reducer(acc, v)
 		if err != nil {
 			return acc, err
 		}
@@ -101,20 +100,7 @@ func TryReduce[T, R any](seq iter.Seq[T], initial R, reducer func(R, T) (R, erro
 	return acc, nil
 }
 
-// RandomIntRange generates a sequence of random integers of the specified size.
-func RandomIntRange(size int) iter.Seq[int] {
-	randSeed := time.Now().UnixNano()
-	rd := rand.New(rand.NewSource(randSeed))
-	return func(yield func(int) bool) {
-		for range size {
-			if !yield(rd.Int()) {
-				return
-			}
-		}
-	}
-}
-
-func Bufferd[T any](seq iter.Seq[T], bufferSize int) iter.Seq[T] {
+func Buffered[T any](seq iter.Seq[T], bufferSize int) iter.Seq[T] {
 	if bufferSize <= 0 {
 		bufferSize = 1
 	}
