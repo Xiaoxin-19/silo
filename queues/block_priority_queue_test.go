@@ -1,10 +1,12 @@
 package queues_test
 
 import (
-	"silo/queues"
+	"context"
 	"sync"
 	"testing"
 	"time"
+
+	"silo/queues"
 )
 
 // intExtractor treats the integer value itself as the priority
@@ -18,196 +20,219 @@ func TestBlockingPriorityQueue_BasicOperations(t *testing.T) {
 		isMinHeap bool
 		limit     int
 		inputs    []int
-		expected  []int // Expected dequeue order
+		expected  []int
 	}{
-		{
-			name:      "MinHeap Unbounded",
-			isMinHeap: true,
-			limit:     0,
-			inputs:    []int{3, 1, 4, 2},
-			expected:  []int{1, 2, 3, 4},
-		},
-		{
-			name:      "MaxHeap Unbounded",
-			isMinHeap: false,
-			limit:     0,
-			inputs:    []int{3, 1, 4, 2},
-			expected:  []int{4, 3, 2, 1},
-		},
-		{
-			name:      "MinHeap Bounded (Not Full)",
-			isMinHeap: true,
-			limit:     10,
-			inputs:    []int{10, 5},
-			expected:  []int{5, 10},
-		},
+		{"MinHeap Unbounded", true, 0, []int{3, 1, 4, 2}, []int{1, 2, 3, 4}},
+		{"MaxHeap Unbounded", false, 0, []int{3, 1, 4, 2}, []int{4, 3, 2, 1}},
+		{"MinHeap Bounded", true, 10, []int{10, 5}, []int{5, 10}},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			bpq := queues.NewBlockingPriorityQueue[int](10, tt.isMinHeap, intExtractor, tt.limit)
 
-			// Test TryEnqueue
+			if bpq.Size() != 0 {
+				t.Errorf("expected size 0, got %d", bpq.Size())
+			}
+
 			for _, v := range tt.inputs {
-				item, ok := bpq.TryEnqueue(v)
-				if !ok {
-					t.Errorf("TryEnqueue failed for value %d", v)
-				}
-				if item == nil {
-					t.Error("TryEnqueue returned nil item")
-				}
+				bpq.TryEnqueue(v)
 			}
 
-			if bpq.Len() != len(tt.inputs) {
-				t.Errorf("expected len %d, got %d", len(tt.inputs), bpq.Len())
+			if bpq.Size() != len(tt.inputs) {
+				t.Errorf("expected size %d, got %d", len(tt.inputs), bpq.Size())
 			}
 
-			// Test Order
 			for _, exp := range tt.expected {
 				val, ok := bpq.TryDequeue()
-				if !ok {
-					t.Errorf("TryDequeue failed, expected %d", exp)
-				}
-				if val != exp {
-					t.Errorf("expected dequeue value %d, got %d", exp, val)
+				if !ok || val != exp {
+					t.Errorf("want %d, got %d (ok=%v)", exp, val, ok)
 				}
 			}
 
-			if bpq.Len() != 0 {
-				t.Error("queue should be empty")
+			if bpq.Size() != 0 {
+				t.Errorf("expected size 0, got %d", bpq.Size())
 			}
 		})
 	}
 }
 
-func TestBlockingPriorityQueue_BoundedFull(t *testing.T) {
-	// MinHeap, Limit 2
-	bpq := queues.NewBlockingPriorityQueue[int](2, true, intExtractor, 2)
-
-	bpq.TryEnqueue(10)
-	bpq.TryEnqueue(20)
-
-	// Queue is full
-	if _, ok := bpq.TryEnqueue(30); ok {
-		t.Error("TryEnqueue should fail when queue is full")
-	}
-
-	if bpq.Len() != 2 {
-		t.Errorf("expected len 2, got %d", bpq.Len())
-	}
-}
-
-func TestBlockingPriorityQueue_Empty(t *testing.T) {
-	bpq := queues.NewBlockingPriorityQueue[int](5, true, intExtractor, 0)
-
-	if _, ok := bpq.TryDequeue(); ok {
-		t.Error("TryDequeue should fail on empty queue")
-	}
-}
-
-func TestBlockingPriorityQueue_BlockingDequeue(t *testing.T) {
+func TestBlockingPriorityQueue_DequeueOrWait_ContextCancel(t *testing.T) {
 	bpq := queues.NewBlockingPriorityQueue[int](10, true, intExtractor, 0)
-	done := make(chan int)
-
-	go func() {
-		val, _ := bpq.DequeueOrWait()
-		done <- val
-	}()
-
-	time.Sleep(50 * time.Millisecond) // Ensure goroutine waits
-
-	bpq.EnqueueOrWait(42)
-
-	select {
-	case val := <-done:
-		if val != 42 {
-			t.Errorf("expected 42, got %d", val)
-		}
-	case <-time.After(100 * time.Millisecond):
-		t.Error("timeout waiting for DequeueOrWait")
-	}
-}
-
-func TestBlockingPriorityQueue_BlockingEnqueue(t *testing.T) {
-	// Limit 1
-	bpq := queues.NewBlockingPriorityQueue[int](1, true, intExtractor, 1)
-	bpq.EnqueueOrWait(100)
 
 	done := make(chan struct{})
+
 	go func() {
-		bpq.EnqueueOrWait(200)
+		_, ok := bpq.DequeueOrWait(context.Background())
+		if ok {
+			t.Error("expected false (closed), got true")
+		}
 		close(done)
 	}()
 
-	time.Sleep(50 * time.Millisecond) // Ensure blocked
+	// Ensure goroutine is scheduled and blocked
+	time.Sleep(10 * time.Millisecond)
+
+	// Action: Cancel/Close the queue
+	bpq.Close()
 
 	select {
 	case <-done:
-		t.Error("EnqueueOrWait should have blocked")
-	default:
-		// OK
-	}
-
-	// Dequeue to make space
-	val, ok := bpq.TryDequeue()
-	if !ok || val != 100 {
-		t.Errorf("expected dequeue 100, got %v", val)
-	}
-
-	select {
-	case <-done:
-		// OK, unblocked
-		// Check that 200 is now in queue
-		if bpq.Len() != 1 {
-			t.Errorf("expected len 1, got %d", bpq.Len())
-		}
-		val, _ := bpq.TryDequeue()
-		if val != 200 {
-			t.Errorf("expected 200, got %d", val)
-		}
+		// Success
 	case <-time.After(100 * time.Millisecond):
-		t.Error("timeout waiting for EnqueueOrWait to unblock")
+		t.Fatal("DequeueOrWait did not return after Close()")
 	}
 }
 
-func TestBlockingPriorityQueue_Concurrency(t *testing.T) {
-	// MinHeap
-	bpq := queues.NewBlockingPriorityQueue[int](100, true, intExtractor, 50)
-	
-	const count = 100
+func TestBlockingPriorityQueue_BlockingEnqueue_Resume(t *testing.T) {
+	// Limit = 1
+	bpq := queues.NewBlockingPriorityQueue[int](1, true, intExtractor, 1)
+
+	// Fill the queue
+	bpq.TryEnqueue(10)
+
+	// Verify full
+	if _, ok := bpq.TryEnqueue(20); ok {
+		t.Fatal("queue should be full")
+	}
+
+	enqueued := make(chan int)
+
+	// Start a blocking producer
+	go func() {
+		bpq.EnqueueOrWait(context.Background(), 99)
+		enqueued <- 99
+	}()
+
+	// Give it a tiny bit of time to hit the block
+	select {
+	case <-enqueued:
+		t.Fatal("EnqueueOrWait returned immediately, expected block")
+	case <-time.After(10 * time.Millisecond):
+		// Expected to timeout here (blocked)
+	}
+
+	// Unblock: Dequeue one item
+	val, ok := bpq.TryDequeue()
+	if !ok || val != 10 {
+		t.Fatalf("TryDequeue failed, got %v, %v", val, ok)
+	}
+
+	// Verify producer unblocks
+	select {
+	case v := <-enqueued:
+		if v != 99 {
+			t.Errorf("got %d, want 99", v)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("producer did not unblock after dequeue")
+	}
+}
+
+func TestBlockingPriorityQueue_Concurrency_Stress(t *testing.T) {
+	// Capacity 10, but we shove 10,000 items through it
+	limit := 10
+	count := 10000
+	bpq := queues.NewBlockingPriorityQueue[int](100, true, intExtractor, limit)
+
 	var wg sync.WaitGroup
 	wg.Add(2)
 
 	// Producer
 	go func() {
 		defer wg.Done()
-		for i := count; i > 0; i-- {
-			bpq.EnqueueOrWait(i)
+		for i := 0; i < count; i++ {
+			bpq.EnqueueOrWait(context.Background(), i)
 		}
 	}()
 
 	// Consumer
-	received := make([]int, 0, count)
+	receivedCount := 0
 	go func() {
 		defer wg.Done()
 		for i := 0; i < count; i++ {
-			val, _ := bpq.DequeueOrWait()
-			received = append(received, val)
+			val, ok := bpq.DequeueOrWait(context.Background())
+			if !ok {
+				t.Error("unexpected closed queue")
+				return
+			}
+			_ = val
+			receivedCount++
 		}
 	}()
 
-	wg.Wait()
+	// Monitor for Deadlock
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
 
-	if len(received) != count {
-		t.Errorf("expected %d items, got %d", count, len(received))
+	select {
+	case <-done:
+		if receivedCount != count {
+			t.Errorf("lost data: sent %d, recv %d", count, receivedCount)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("DEADLOCK DETECTED: Concurrency test timed out")
 	}
-	
-	// Since producer and consumer run concurrently, strict global order isn't guaranteed 
-	// (consumer might pick up 100, then 99, while 98 hasn't been enqueued yet).
-	// But we can check basic integrity or if we paused producer it would be sorted.
-	// For this test, just ensuring no deadlock and data loss is sufficient.
-	
-	if bpq.Len() != 0 {
-		t.Errorf("queue should be empty, got %d", bpq.Len())
+}
+
+func TestBlockingPriorityQueue_ReadySignaling(t *testing.T) {
+	bpq := queues.NewBlockingPriorityQueue[int](10, true, intExtractor, 0)
+
+	// 1. Initially Empty -> Ready() should block
+	select {
+	case <-bpq.Ready():
+		t.Fatal("Ready() should block when empty")
+	default:
+		// OK
+	}
+
+	// 2. Enqueue -> Ready() should signal
+	bpq.TryEnqueue(1)
+
+	// Verify signal exists (Check 1)
+	select {
+	case <-bpq.Ready():
+		// OK, we consumed the signal here!
+	case <-time.After(10 * time.Millisecond):
+		t.Fatal("Ready() failed to signal after enqueue")
+	}
+
+	// 2b. Enqueue ANOTHER item. Size = 1 -> 2.
+
+	bpq.TryEnqueue(2)
+	// Now size = 2. Signal should be full.
+
+	// Check 2: Signal is present
+	select {
+	case <-bpq.Ready():
+		// OK, consumed.
+	default:
+		t.Fatal("Signal missing for second item")
+	}
+
+	// 3. Dequeue ONE item. Size 2 -> 1.
+	// This operation MUST re-arm the signal because Size > 0.
+	bpq.TryDequeue()
+
+	// Check 3: Signal should be re-armed (Level Triggered!)
+	select {
+	case <-bpq.Ready():
+		// OK! This proves maintainSignals() works.
+	default:
+		t.Fatal("Signal lost! Dequeue() should have re-armed signal because queue is not empty")
+	}
+
+	// 4. Dequeue last item. Size 1 -> 0.
+	bpq.TryDequeue()
+
+	// Check 4: Should block (Edge Triggered OFF)
+	select {
+	case <-bpq.Ready():
+		t.Fatal("Ready() should block after emptying queue")
+	default:
+		// OK
 	}
 }

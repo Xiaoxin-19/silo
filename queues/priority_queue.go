@@ -99,6 +99,29 @@ func (pq *PriorityQueue[T]) Dequeue() (value T, ok bool) {
 	return heap.Pop(pq.heap).(*PriorityItem[T]).Value, true
 }
 
+func (pq *PriorityQueue[T]) DequeueBatchInto(dst []T) int {
+	count := 0
+	for i := 0; i < len(dst); i++ {
+		if pq.heap.Len() == 0 {
+			break
+		}
+		dst[i] = heap.Pop(pq.heap).(*PriorityItem[T]).Value
+		count++
+	}
+	return count
+}
+
+func (pq *PriorityQueue[T]) EnqueueAll(values ...T) {
+	buffer := make([]PriorityItem[T], len(values))
+	for i, v := range values {
+		buffer[i] = PriorityItem[T]{
+			Value:    v,
+			priority: pq.heap.PriorityExtractor(v),
+		}
+		heap.Push(pq.heap, &buffer[i])
+	}
+}
+
 func (pq *PriorityQueue[T]) Peek() (value T, ok bool) {
 	if pq.heap.Len() == 0 {
 		return value, false

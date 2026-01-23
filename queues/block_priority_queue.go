@@ -1,68 +1,67 @@
 package queues
 
-import "sync"
+import (
+	"context"
+	"sync"
+)
 
-// BlockingPriorityQueue is a thread-safe priority queue that supports blocking enqueue and dequeue operations.
 type BlockingPriorityQueue[T any] struct {
-	mu sync.Mutex
-	pq *PriorityQueue[T]
-
-	notEmpty *sync.Cond
-	notFull  *sync.Cond
-
-	// limit <=0 represents unbounded
+	mu    sync.Mutex
+	pq    *PriorityQueue[T]
 	limit int
+
+	// Signaling Channels (Buffered = 1 for Level-Triggered Semantics)
+	notEmpty chan struct{}
+	notFull  chan struct{}
+	done     chan struct{} // Broadcast close
 }
 
-// NewBlockingPriorityQueue creates a new BlockingPriorityQueue with the specified initial capacity, heap type, priority extractor, and limit.
-// If isMinHeap is true, it creates a min-heap; otherwise, it creates a max-heap.
-// PriorityExtractor is a function that extracts the priority value from an element of type T.
-// If limit <= 0, the queue is unbounded.
 func NewBlockingPriorityQueue[T any](initCapacity int, isMinHeap bool, extractor func(T) int64, limit int) *BlockingPriorityQueue[T] {
-	bpq := &BlockingPriorityQueue[T]{
-		pq:    NewPriorityQueue(initCapacity, isMinHeap, extractor),
-		limit: limit,
+	return &BlockingPriorityQueue[T]{
+		pq:       NewPriorityQueue(initCapacity, isMinHeap, extractor),
+		limit:    limit,
+		notEmpty: make(chan struct{}, 1),
+		notFull:  make(chan struct{}, 1),
+		done:     make(chan struct{}),
 	}
-
-	bpq.notEmpty = sync.NewCond(&bpq.mu)
-	bpq.notFull = sync.NewCond(&bpq.mu)
-	return bpq
 }
 
-// EnqueueOrWait blocking enqueue until there is space
-func (q *BlockingPriorityQueue[T]) EnqueueOrWait(value T) *PriorityItem[T] {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-
-	for q.limit > 0 && q.pq.Size() >= q.limit {
-		q.notFull.Wait()
+// maintainSignals ensures the signal channels reflect the queue's truth.
+// MUST be called with lock held.
+func (q *BlockingPriorityQueue[T]) maintainSignals() {
+	// 1. Notify Consumers if data exists
+	if q.pq.Size() > 0 {
+		select {
+		case q.notEmpty <- struct{}{}:
+		default:
+		}
 	}
-
-	item := q.pq.Enqueue(value)
-
-	q.notEmpty.Signal()
-	return item
+	// 2. Notify Producers if space exists
+	if q.limit <= 0 || q.pq.Size() < q.limit {
+		select {
+		case q.notFull <- struct{}{}:
+		default:
+		}
+	}
 }
 
-// DequeueOrWait blocking dequeue until there is data
-func (q *BlockingPriorityQueue[T]) DequeueOrWait() (T, bool) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-
-	for q.pq.Size() == 0 {
-		q.notEmpty.Wait()
+func (q *BlockingPriorityQueue[T]) EnqueueOrWait(ctx context.Context, value T) (*PriorityItem[T], error) {
+	for {
+		item, ok := q.TryEnqueue(value)
+		if ok {
+			return item, nil
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-q.done:
+			return nil, ErrQueueClosed
+		case <-q.notFull:
+			// Retry
+		}
 	}
-
-	val, ok := q.pq.Dequeue()
-
-	if q.limit > 0 {
-		q.notFull.Signal()
-	}
-
-	return val, ok
 }
 
-// TryEnqueue non-blocking enqueue, returns false if full
 func (q *BlockingPriorityQueue[T]) TryEnqueue(value T) (*PriorityItem[T], bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -72,11 +71,29 @@ func (q *BlockingPriorityQueue[T]) TryEnqueue(value T) (*PriorityItem[T], bool) 
 	}
 
 	item := q.pq.Enqueue(value)
-	q.notEmpty.Signal()
+	q.maintainSignals()
 	return item, true
 }
 
-// TryDequeue non-blocking dequeue, returns false if empty
+func (q *BlockingPriorityQueue[T]) DequeueOrWait(ctx context.Context) (T, bool) {
+	for {
+		val, ok := q.TryDequeue()
+		if ok {
+			return val, true
+		}
+		select {
+		case <-ctx.Done():
+			var zero T
+			return zero, false
+		case <-q.done:
+			var zero T
+			return zero, false
+		case <-q.notEmpty:
+			// Retry
+		}
+	}
+}
+
 func (q *BlockingPriorityQueue[T]) TryDequeue() (T, bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -87,15 +104,40 @@ func (q *BlockingPriorityQueue[T]) TryDequeue() (T, bool) {
 	}
 
 	val, ok := q.pq.Dequeue()
-	if q.limit > 0 {
-		q.notFull.Signal()
-	}
+	q.maintainSignals()
 	return val, ok
 }
 
-// Len returns the thread-safe length of the queue
-func (q *BlockingPriorityQueue[T]) Len() int {
+func (q *BlockingPriorityQueue[T]) Size() int {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	return q.pq.Size()
+}
+
+func (q *BlockingPriorityQueue[T]) IsEmpty() bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.pq.IsEmpty()
+}
+
+func (q *BlockingPriorityQueue[T]) Peek() (T, bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.pq.Peek()
+}
+
+// Ready allows usage in external select statements (e.g. Batcher)
+func (q *BlockingPriorityQueue[T]) Ready() <-chan struct{} {
+	return q.notEmpty
+}
+
+func (q *BlockingPriorityQueue[T]) Close() {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	select {
+	case <-q.done:
+		return // already closed
+	default:
+		close(q.done)
+	}
 }
