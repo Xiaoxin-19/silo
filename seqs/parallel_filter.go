@@ -30,6 +30,8 @@ type parallelFilterExecutor[T any] struct {
 	feederWg sync.WaitGroup
 	// cancellation flag, set when consumer stops early
 	canceled atomic.Bool
+	// semaphore to limit the number of in-flight batches (backpressure for ordering)
+	inflightSem chan struct{}
 }
 
 // -------------------------------------------------------
@@ -38,12 +40,16 @@ type parallelFilterExecutor[T any] struct {
 
 func newFilterExecutor[T any](cfg parallelConfig, predicate func(T) (bool, error)) *parallelFilterExecutor[T] {
 	chanSize := cfg.workers * 2
+	// Limit in-flight batches to prevent unbounded memory usage.
+	// E.g., allow buffering up to 4x workers count.
+	maxInflight := cfg.workers * 4
 	return &parallelFilterExecutor[T]{
-		predicate: predicate,
-		batchSize: cfg.batchSize,
-		workers:   cfg.workers,
-		jobs:      make(chan batchJob[T], chanSize),
-		results:   make(chan batchResult[T], chanSize),
+		predicate:   predicate,
+		batchSize:   cfg.batchSize,
+		workers:     cfg.workers,
+		jobs:        make(chan batchJob[T], chanSize),
+		results:     make(chan batchResult[T], chanSize),
+		inflightSem: make(chan struct{}, maxInflight),
 		chunkPool: &sync.Pool{New: func() any {
 			s := make([]T, 0, cfg.batchSize)
 			return &s
@@ -73,6 +79,13 @@ func (e *parallelFilterExecutor[T]) startFeeder(seq iter.Seq[T]) {
 		for v := range seq {
 			*chunkPtr = append(*chunkPtr, v)
 			if len(*chunkPtr) == e.batchSize {
+				// Acquire token before sending job to limit in-flight batches
+				select {
+				case e.inflightSem <- struct{}{}:
+				case <-e.ctx.Done():
+					return
+				}
+
 				if !e.sendJob(idx, chunkPtr) {
 					return
 				}
@@ -84,6 +97,11 @@ func (e *parallelFilterExecutor[T]) startFeeder(seq iter.Seq[T]) {
 			}
 		}
 		if len(*chunkPtr) > 0 {
+			select {
+			case e.inflightSem <- struct{}{}:
+			case <-e.ctx.Done():
+				return
+			}
 			if e.sendJob(idx, chunkPtr) {
 				chunkPtr = nil // 所有权移交
 			}
@@ -129,6 +147,8 @@ func (e *parallelFilterExecutor[T]) collect(yield func(T, error) bool) {
 			if !e.yieldChunk(res.chunk, yield) {
 				return
 			}
+			// Release token after the chunk is yielded (consumed)
+			<-e.inflightSem
 			nextIdx++
 
 			// 2. 检查缓冲区的后续包
@@ -138,6 +158,7 @@ func (e *parallelFilterExecutor[T]) collect(yield func(T, error) bool) {
 					if !e.yieldChunk(chunkPtr, yield) {
 						return
 					}
+					<-e.inflightSem
 					nextIdx++
 				} else {
 					break

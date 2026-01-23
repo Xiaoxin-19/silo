@@ -268,6 +268,9 @@ func (b *Batcher[T]) dispatcherLoop(ctx context.Context) {
 	flush := func(ctx context.Context, reason string) {
 		if len(buffer) > 0 {
 			b.sendJobs(ctx, buffer, reason)
+			// We allocate a new slice here instead of reusing via sync.Pool.
+			// Since the slice is passed to the user's handler, we must ensure ownership isolation.
+			// Pooling would risk data corruption if the user retains the slice.
 			buffer = make([]T, 0, b.batchSize)
 		}
 	}

@@ -91,6 +91,8 @@ type parallelMapExecutor[T, R any] struct {
 	feederWg sync.WaitGroup
 	// cancellation flag, set when consumer stops early
 	canceled atomic.Bool
+	// semaphore to limit the number of in-flight batches (backpressure for ordering)
+	inflightSem chan struct{}
 }
 
 // -------------------------------------------------------
@@ -99,12 +101,16 @@ type parallelMapExecutor[T, R any] struct {
 
 func newMapExecutor[T, R any](cfg parallelConfig, transform func(T) (R, error)) *parallelMapExecutor[T, R] {
 	chanSize := cfg.workers * 2
+	// Limit in-flight batches to prevent unbounded memory usage in ordered mode.
+	// E.g., allow buffering up to 4x workers count.
+	maxInflight := cfg.workers * 4
 	return &parallelMapExecutor[T, R]{
-		transform: transform,
-		batchSize: cfg.batchSize,
-		workers:   cfg.workers,
-		jobs:      make(chan batchJob[T], chanSize),
-		results:   make(chan batchResult[R], chanSize),
+		transform:   transform,
+		batchSize:   cfg.batchSize,
+		workers:     cfg.workers,
+		jobs:        make(chan batchJob[T], chanSize),
+		results:     make(chan batchResult[R], chanSize),
+		inflightSem: make(chan struct{}, maxInflight),
 		chunkPool: &sync.Pool{New: func() any {
 			s := make([]T, 0, cfg.batchSize)
 			return &s
@@ -135,6 +141,13 @@ func (e *parallelMapExecutor[T, R]) startFeeder(seq iter.Seq[T]) {
 		for v := range seq {
 			*chunkPtr = append(*chunkPtr, v)
 			if len(*chunkPtr) == e.batchSize {
+				// Acquire token before sending job to limit in-flight batches
+				select {
+				case e.inflightSem <- struct{}{}:
+				case <-e.ctx.Done():
+					return
+				}
+
 				if !e.sendJob(idx, chunkPtr) {
 					return
 				}
@@ -148,6 +161,11 @@ func (e *parallelMapExecutor[T, R]) startFeeder(seq iter.Seq[T]) {
 
 		// Flush remaining items
 		if len(*chunkPtr) > 0 {
+			select {
+			case e.inflightSem <- struct{}{}:
+			case <-e.ctx.Done():
+				return
+			}
 			if e.sendJob(idx, chunkPtr) {
 				chunkPtr = nil // transfer ownership, prevent double free
 			}
@@ -194,6 +212,8 @@ func (e *parallelMapExecutor[T, R]) collect(yield func(R, error) bool) {
 			if !e.yieldChunk(res.chunk, yield) {
 				return
 			}
+			// Release token after the chunk is yielded (consumed)
+			<-e.inflightSem
 			nextIdx++
 
 			// 2. 检查缓冲区的后续包
@@ -203,6 +223,7 @@ func (e *parallelMapExecutor[T, R]) collect(yield func(R, error) bool) {
 					if !e.yieldChunk(chunk, yield) {
 						return
 					}
+					<-e.inflightSem
 					nextIdx++
 				} else {
 					break
@@ -220,6 +241,8 @@ func (e *parallelMapExecutor[T, R]) collectUnordered(yield func(R, error) bool) 
 		if !e.yieldChunk(res.chunk, yield) {
 			return
 		}
+		// In unordered mode, we also release token here
+		<-e.inflightSem
 	}
 }
 
@@ -362,7 +385,7 @@ func BatchMap[T, R any](seq iter.Seq[T], transform func(T) (R, error), opts ...P
 			exec.canceled.Store(true)
 		}()
 
-		// 退出前确保 Feeder 停止，防止 Data Race
+		// Ensure all goroutines are cleaned up on exit
 		defer func() {
 			cancel()
 			exec.feederWg.Wait()
